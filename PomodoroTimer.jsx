@@ -40,8 +40,12 @@ function loadSettings() {
 const getDuration = (mode, s) =>
   ({ focus: s.focus, shortBreak: s.shortBreak, longBreak: s.longBreak }[mode] * 60);
 
-const todayStr = () => new Date().toISOString().slice(0, 10);
-const yesterdayStr = () => new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+const localDateStr = (d = new Date()) => {
+  const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, "0"), day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
+const todayStr = () => localDateStr();
+const yesterdayStr = () => localDateStr(new Date(Date.now() - 86400000));
 
 const makeNoiseBuffer = (ctx, secs) => {
   const size = ctx.sampleRate * secs;
@@ -128,7 +132,7 @@ export default function PomodoroTimer() {
   const [settings, setSettings] = useState(() => loadSettings());
   const [timeLeft, setTimeLeft] = useState(() => { const s = loadSettings(); return s.focus * 60; });
   const [isRunning, setIsRunning] = useState(false);
-  const [sessions, setSessions] = useState(0);
+  const [sessions, setSessions] = useState(() => loadDailyData().todaySessions);
   const [showSettings, setShowSettings] = useState(false);
   const [showTasks, setShowTasks] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
@@ -148,6 +152,7 @@ export default function PomodoroTimer() {
 
   const [minimalMode, setMinimalMode] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showWelcome, setShowWelcome] = useState(() => !localStorage.getItem("focus_welcomed"));
 
   const [ytVideoId, setYtVideoId] = useState(null);
   const [ytActivated, setYtActivated] = useState(false);
@@ -1023,7 +1028,7 @@ export default function PomodoroTimer() {
     return Array.from({ length: 7 }, (_, i) => {
       const d = new Date(monday);
       d.setDate(monday.getDate() + i);
-      const dateStr = d.toISOString().slice(0, 10);
+      const dateStr = localDateStr(d);
       const isFuture = d > todayDate;
       const isToday = dateStr === todayStr();
       const label = dayLabels[i];
@@ -1261,75 +1266,52 @@ export default function PomodoroTimer() {
           <div style={{ width: 46 }} />
         </div>
 
-        {/* Session count + daily progress */}
-        <div className="flex flex-col items-center" style={{ gap: 10 }}>
-          <div className="flex items-center" style={{ gap: 10, fontSize: 13, color: T.textDim }}>
-            <span style={{ fontSize: 17 }}>🦦</span>
-            <span style={{ color: sessions > 0 ? T.accent : T.textDim, fontWeight: 600, fontSize: 14, transition: "color 0.3s" }}>
-              ×{sessions}
+        {/* Session progress + stats */}
+        <div className="flex flex-col items-center" style={{ gap: 8 }}>
+
+          {/* Row 1: count + progress bar + % inline */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 12, color: progressPct >= 100 ? T.accent : T.textDim, transition: "color 0.3s", whiteSpace: "nowrap" }}>
+              {todaySessions} / {settings.dailyGoal} {i18n.heute}
             </span>
-            <span style={{ color: T.textDim }}>{sessions === 1 ? i18n.session1 : i18n.sessions}</span>
-            {totalSess > 0 && (
-              <span title={`${totalSess} ${de ? "Sessions gesamt" : "total sessions"} · ${currentLevel.next ? `${totalSess}/${currentLevel.next}` : "Max"}`}
-                style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 11,
-                  color: T.textDim2, borderLeft: `1px solid ${T.border}`, paddingLeft: 10, cursor: "default" }}>
-                <span>{currentLevel.icon}</span>
-                <span style={{ letterSpacing: "0.03em" }}>{currentLevel.name}</span>
-              </span>
-            )}
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-            <div style={{ width: 200, height: 4, background: T.barEmpty, borderRadius: 4, overflow: "hidden" }}>
+            <div style={{ width: 90, height: 4, background: T.barEmpty, borderRadius: 4, overflow: "hidden" }}>
               <div style={{ height: "100%", width: `${progressPct}%`, borderRadius: 4,
-                background: progressPct >= 100 ? T.accent : `${T.accent}55`,
+                background: progressPct >= 100 ? T.accent : `${T.accent}66`,
                 transition: "width 0.5s ease-out, background 0.3s",
                 boxShadow: progressPct >= 100 ? `0 0 8px ${T.accent}66` : "none" }} />
             </div>
-            <div style={{ fontSize: 10, color: progressPct >= 100 ? T.accent : T.textDim2, letterSpacing: "0.06em", transition: "color 0.3s" }}>
-              {Math.round(progressPct)}% {i18n.percent}
-            </div>
-          </div>
-          {totalSess > 0 && currentLevel.next && (
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
-              <div style={{ width: 200, height: 3, background: T.barEmpty, borderRadius: 3, overflow: "hidden" }}>
-                <div style={{ height: "100%", width: `${levelPct}%`, borderRadius: 3,
-                  background: `${T.accent}88`, transition: "width 0.6s ease-out" }} />
-              </div>
-              <span style={{ fontSize: 9, color: T.textDim2, letterSpacing: "0.07em" }}>
-                {currentLevel.icon} → {[...LEVELS].find(l => l.min === currentLevel.next)?.icon} · {totalSess} / {currentLevel.next}
-              </span>
-            </div>
-          )}
-
-          <div className="flex items-center" style={{ gap: 10, fontSize: 11, color: T.textDim }}>
-            {streak > 0 && (
-              <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                <span>🔥</span>
-                <span style={{ color: streak >= 7 ? T.accent : T.textDim, fontWeight: streak >= 3 ? 600 : 400, transition: "color 0.3s" }}>
-                  {streak}
-                </span>
-                {/* Streak dot chain — last 7 days */}
-                <span style={{ display: "flex", alignItems: "center", gap: 2, marginLeft: 2 }}>
-                  {last7Days.map(({ date, count }) => (
-                    <span key={date} title={`${count} sessions`} style={{
-                      width: 5, height: 5, borderRadius: "50%",
-                      background: count > 0 ? T.accent : T.barEmpty,
-                      display: "inline-block",
-                      boxShadow: count > 0 ? "0 0 4px rgba(224,123,57,0.4)" : "none",
-                      transition: "background 0.3s",
-                    }} />
-                  ))}
-                </span>
-              </span>
-            )}
-            <span style={{ color: progressPct >= 100 ? T.accent : T.textDim, transition: "color 0.3s" }}>
-              {todaySessions} / {settings.dailyGoal} {i18n.heute}
+            <span style={{ fontSize: 11, color: progressPct >= 100 ? T.accent : T.textDim2, minWidth: 28, transition: "color 0.3s" }}>
+              {Math.round(progressPct)}%
             </span>
           </div>
 
-          {/* All-time stats */}
-          {(totals.sessions ?? 0) > 0 && (
-            <div style={{ display: "flex", gap: 18, marginTop: 2 }}>
+          {/* Row 2: streak + level (only if data exists) */}
+          {(streak > 0 || totalSess > 0) && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12, color: T.textDim }}>
+              {streak > 0 && (
+                <span style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                  <span>🔥</span>
+                  <span style={{ color: streak >= 7 ? T.accent : T.textDim, fontWeight: streak >= 3 ? 600 : 400, transition: "color 0.3s" }}>
+                    {streak}
+                  </span>
+                </span>
+              )}
+              {streak > 0 && totalSess > 0 && (
+                <span style={{ width: 1, height: 11, background: T.border, display: "inline-block" }} />
+              )}
+              {totalSess > 0 && (
+                <span title={`${totalSess} ${de ? "Sessions gesamt" : "total sessions"}`}
+                  style={{ display: "flex", alignItems: "center", gap: 3, cursor: "default" }}>
+                  <span>{currentLevel.icon}</span>
+                  <span style={{ color: T.textDim2 }}>{currentLevel.name}</span>
+                </span>
+              )}
+            </div>
+          )}
+
+          {/* Row 3: all-time stats */}
+          {totalSess > 0 && (
+            <div style={{ display: "flex", gap: 18 }}>
               {[
                 { val: totals.sessions ?? 0, label: i18n.totalSess },
                 { val: `${Math.round((totals.minutes ?? 0) / 60 * 10) / 10}`, label: i18n.totalHours },
@@ -1343,8 +1325,8 @@ export default function PomodoroTimer() {
             </div>
           )}
 
-          {/* Week bar chart */}
-          <div style={{ display: "flex", alignItems: "flex-end", gap: 6, marginTop: 2 }}>
+          {/* Row 4: week bar chart */}
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 6 }}>
             {last7Days.map(({ date, label, count, isFuture, isToday }) => {
               const barH = Math.max(3, Math.round((count / weekMax) * 26));
               return (
@@ -1363,6 +1345,7 @@ export default function PomodoroTimer() {
               );
             })}
           </div>
+
         </div>
       </div>
 
@@ -1904,11 +1887,59 @@ export default function PomodoroTimer() {
             </div>
           </div>
 
+          {/* Daten */}
+          <div style={{ ...S.sectionLabel, marginTop: 10 }}>{de ? "Daten" : "Data"}</div>
+          <div style={{ background: T.tabBg, borderRadius: 10, overflow: "hidden", border: `1px solid ${T.border}` }}>
+            <button onClick={() => {
+              if (!window.confirm(de ? "Alle Statistiken zurücksetzen?" : "Reset all statistics?")) return;
+              localStorage.removeItem(STORAGE_KEY);
+              localStorage.removeItem(WEEK_KEY);
+              localStorage.removeItem(TOTALS_KEY);
+              setTodaySessions(0); setSessions(0); setStreak(0);
+              setWeekData({}); setTotals({});
+            }} style={{ width: "100%", padding: "10px 12px", background: "none", border: "none",
+              textAlign: "left", fontSize: 13, color: "#e05050", cursor: "pointer", fontFamily: "inherit" }}>
+              {de ? "Statistiken zurücksetzen" : "Reset statistics"}
+            </button>
+          </div>
+
         </div>
       )}
 
       {/* YouTube player — always in DOM so YT.Player() can target it */}
       <div id="yt-player-div" style={{ width: 1, height: 1, opacity: 0, position: "fixed", top: -10, left: -10, pointerEvents: "none" }} />
+
+      {/* Welcome popup — shown once on first visit */}
+      {showWelcome && (
+        <div onClick={() => { localStorage.setItem("focus_welcomed", "1"); setShowWelcome(false); }}
+          style={{ position: "fixed", inset: 0, zIndex: 60, background: "rgba(0,0,0,0.78)",
+            backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center",
+            animation: "overlayIn 0.2s ease-out" }}>
+          <div onClick={e => e.stopPropagation()} style={{
+            background: T.panelBg, border: `1px solid ${T.border}`,
+            borderRadius: 20, padding: "32px 36px", maxWidth: 300, textAlign: "center",
+            boxShadow: T.shadow }}>
+            <div style={{ fontSize: 44, marginBottom: 12 }}>🦦</div>
+            <div style={{ fontSize: 19, fontWeight: 700, color: T.text, marginBottom: 10,
+              fontFamily: "DM Serif Display, serif", lineHeight: 1.3 }}>
+              {de ? "Willkommen bei Focus Partner" : "Welcome to Focus Partner"}
+            </div>
+            <div style={{ fontSize: 13, color: T.textMid, lineHeight: 1.65, marginBottom: 22 }}>
+              {de
+                ? <>Tipp: Öffne die <strong style={{ color: T.text }}>Einstellungen ⚙️</strong> (rechts unten) um Ambient Sounds einzustellen — Rain, Neural, brain.fm und mehr.</>
+                : <>Tip: Open <strong style={{ color: T.text }}>Settings ⚙️</strong> (bottom right) to set up ambient sounds — Rain, Neural, brain.fm and more.</>}
+            </div>
+            <button onClick={() => { localStorage.setItem("focus_welcomed", "1"); setShowWelcome(false); }}
+              style={{ background: T.accent, color: T.bg, border: "none", borderRadius: 10,
+                padding: "10px 30px", fontSize: 14, fontWeight: 600, cursor: "pointer",
+                fontFamily: "inherit", transition: "opacity 0.15s" }}
+              onMouseEnter={e => (e.currentTarget.style.opacity = "0.85")}
+              onMouseLeave={e => (e.currentTarget.style.opacity = "1")}>
+              {de ? "Los geht's" : "Let's go"}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
