@@ -231,6 +231,7 @@ export default function PomodoroTimer() {
       .pomodoro-input { -moz-appearance:textfield; user-select:text; -webkit-user-select:text }
       .pomodoro-input:focus { outline:none; border-color:var(--accent,#e07b39) !important }
       input, textarea { user-select:text; -webkit-user-select:text }
+      html, body { overflow: hidden; position: fixed; width: 100%; height: 100%; }
     `;
     document.head.appendChild(el);
     return () => { const e = document.getElementById(id); if (e) e.remove(); };
@@ -1233,9 +1234,15 @@ export default function PomodoroTimer() {
     </button>
   );
 
+  const isMobile = useMemo(() =>
+    /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || window.innerWidth < 768
+  , []);
+
   return (
-    <div className="relative flex items-center justify-center overflow-hidden"
-      style={{ background: T.bg, minHeight: "100vh", fontFamily: "'DM Sans', sans-serif", color: T.text, transition: "background 0.3s, color 0.3s", userSelect: "none" }}>
+    <div className="relative flex items-center justify-center"
+      style={{ background: T.bg, width: "100%", height: "100dvh", minHeight: "-webkit-fill-available",
+        fontFamily: "'DM Sans', sans-serif", color: T.text, transition: "background 0.3s, color 0.3s",
+        userSelect: "none", overflow: "hidden", touchAction: "pan-y" }}>
 
       {/* Glow */}
       <div style={{ position: "absolute", width: 600, height: 600, borderRadius: "50%",
@@ -1273,8 +1280,8 @@ export default function PomodoroTimer() {
         </svg>
       </button>
 
-      {/* Fullscreen toggle — top-right */}
-      <button
+      {/* Fullscreen toggle — top-right (desktop only) */}
+      {!isMobile && <button
         onClick={toggleFullscreen}
         aria-label={isFullscreen ? i18n.exitFs : i18n.fullscreen}
         title={isFullscreen ? i18n.exitFs : i18n.fullscreen}
@@ -1290,7 +1297,7 @@ export default function PomodoroTimer() {
             : <><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/></>
           }
         </svg>
-      </button>
+      </button>}
 
       {/* Minimal mode overlay */}
       {minimalMode && (
@@ -1527,8 +1534,8 @@ export default function PomodoroTimer() {
         </div>
       </div>
 
-      {/* Bottom-left: shortcuts */}
-      <button onClick={() => setShowShortcuts(s => !s)} aria-label="Keyboard shortcuts"
+      {/* Bottom-left: shortcuts (desktop only) */}
+      {!isMobile && <button onClick={() => setShowShortcuts(s => !s)} aria-label="Keyboard shortcuts"
         style={{ position: "fixed", bottom: 24, left: 28, width: 36, height: 36, borderRadius: "50%",
           background: "transparent", border: "none", cursor: "pointer", display: "flex",
           alignItems: "center", justifyContent: "center",
@@ -1537,10 +1544,10 @@ export default function PomodoroTimer() {
         onMouseEnter={e => { if (!showShortcuts) e.currentTarget.style.color=T.text; }}
         onMouseLeave={e => { e.currentTarget.style.color=showShortcuts?T.accent:T.textMid; }}>
         ?
-      </button>
+      </button>}
 
       {/* Bottom-right: tasks + settings */}
-      <div style={{ position: "fixed", bottom: 20, right: 24, display: "flex", gap: 2 }}>
+      <div style={{ position: "fixed", bottom: "max(20px, env(safe-area-inset-bottom, 20px))", right: 24, display: "flex", gap: 2 }}>
         <button onClick={() => { setShowTasks(s => !s); setShowSettings(false); }}
           aria-label="Toggle task list"
           style={{ width: 36, height: 36, borderRadius: "50%", background: "transparent", border: "none",
@@ -1569,7 +1576,7 @@ export default function PomodoroTimer() {
 
       {/* Task panel */}
       {showTasks && (
-        <div style={{ ...S.panel, bottom: 66, right: 20, width: 284 }}>
+        <div style={{ ...S.panel, bottom: "max(66px, calc(env(safe-area-inset-bottom, 0px) + 66px))", right: 20, width: 284 }}>
           <p style={S.sectionLabel}>{i18n.aufgaben}</p>
           <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
             <input type="text" placeholder={i18n.addTask} value={taskInput}
@@ -1666,72 +1673,7 @@ export default function PomodoroTimer() {
 
       {/* Settings panel */}
       {showSettings && (
-        <div style={{ ...S.panel, bottom: 66, right: 20, width: 284, maxHeight: "calc(100vh - 120px)", overflowY: "auto" }}>
-
-          {/* ── Presets ── */}
-          <p style={{ ...S.sectionLabel, marginBottom: 8 }}>{de ? "Profile" : "Presets"}</p>
-          <div style={{ display: "flex", gap: 5, marginBottom: 16 }}>
-            {presets.map((p, idx) => {
-              const savePreset = () => {
-                const snap = {
-                  label: `${de ? "Profil" : "Preset"} ${idx + 1}`,
-                  focus: settings.focus, shortBreak: settings.shortBreak, longBreak: settings.longBreak,
-                  ambient: settings.ambient, ambientCategory: settings.ambientCategory,
-                  ambientMix: settings.ambientMix, accentColor: settings.accentColor,
-                  lightMode: settings.lightMode,
-                };
-                const next = [...presets]; next[idx] = snap;
-                setPresets(next); savePresetsData(next);
-              };
-              const loadPreset = () => {
-                if (!p) return;
-                setSettings(s => ({ ...s,
-                  focus: p.focus, shortBreak: p.shortBreak, longBreak: p.longBreak,
-                  ambient: p.ambient, ambientCategory: p.ambientCategory,
-                  ambientMix: p.ambientMix ?? "off", accentColor: p.accentColor,
-                  lightMode: p.lightMode,
-                }));
-              };
-              const deletePreset = (e) => {
-                e.stopPropagation();
-                const next = [...presets]; next[idx] = null;
-                setPresets(next); savePresetsData(next);
-              };
-              return (
-                <div key={idx} style={{ flex: 1, position: "relative" }}>
-                  {p ? (
-                    <>
-                      <button onClick={loadPreset}
-                        style={{ width: "100%", padding: "6px 4px", borderRadius: 8, fontSize: 10, cursor: "pointer",
-                          background: T.tabBg, border: `1px solid ${T.border}`, color: T.textMid,
-                          display: "flex", flexDirection: "column", alignItems: "center", gap: 2, transition: "border-color 0.15s" }}
-                        onMouseEnter={e => e.currentTarget.style.borderColor = T.accent}
-                        onMouseLeave={e => e.currentTarget.style.borderColor = T.border}>
-                        <span style={{ width: 10, height: 10, borderRadius: "50%", background: p.accentColor, flexShrink: 0 }} />
-                        <span style={{ fontSize: 9, color: T.textDim2 }}>{p.focus}m</span>
-                      </button>
-                      <button onClick={deletePreset}
-                        style={{ position: "absolute", top: -4, right: -4, width: 14, height: 14, borderRadius: "50%",
-                          background: T.inputBg, border: `1px solid ${T.border}`, color: T.textDim, fontSize: 9,
-                          cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1 }}>
-                        ✕
-                      </button>
-                    </>
-                  ) : (
-                    <button onClick={savePreset}
-                      style={{ width: "100%", padding: "6px 4px", borderRadius: 8, fontSize: 10, cursor: "pointer",
-                        background: "transparent", border: `1px dashed ${T.border}`, color: T.textDim2,
-                        display: "flex", flexDirection: "column", alignItems: "center", gap: 2, transition: "border-color 0.15s" }}
-                      onMouseEnter={e => e.currentTarget.style.borderColor = T.textDim}
-                      onMouseLeave={e => e.currentTarget.style.borderColor = T.border}>
-                      <span style={{ fontSize: 13 }}>+</span>
-                      <span style={{ fontSize: 9 }}>{de ? "Speichern" : "Save"}</span>
-                    </button>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+        <div style={{ ...S.panel, bottom: 66, right: 20, width: 284, maxHeight: "calc(100dvh - 120px)", overflowY: "auto" }}>
 
           {/* ── Timer ── */}
           <p style={{ ...S.sectionLabel, marginBottom: 8 }}>{de ? "Timer" : "Timer"}</p>
