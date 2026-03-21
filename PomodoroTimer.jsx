@@ -25,6 +25,7 @@ const DEFAULT_SETTINGS = {
   ambientAutoStop: 0,   // 0=off, minutes until ambient stops (options: 30, 60, 120)
   ambientMixRatio: 0.5, // ratio for mix secondary sound (0=silent, 1=same as main)
   clockSize: "M",       // "S" | "M" | "L" — timer clock font size
+  uiScale: "M",         // "S" | "M" | "L" — overall UI zoom
   bgStyle: "none",      // "none" | "glow" | "dots" — subtle background texture
 };
 
@@ -282,12 +283,13 @@ export default function PomodoroTimer() {
     try { localStorage.setItem(TASKS_KEY, JSON.stringify(tasks)); } catch {}
   }, [tasks]);
 
-  // Pause/resume AudioContext when tab is hidden/visible (save CPU)
+  // Resume AudioContext if browser auto-suspended it (e.g. iOS background policy)
+  // We do NOT suspend intentionally — ambient sound should keep playing in background
   useEffect(() => {
     const handler = () => {
-      if (!audioCtxRef.current) return;
-      if (document.hidden) audioCtxRef.current.suspend().catch(() => {});
-      else audioCtxRef.current.resume().catch(() => {});
+      if (!document.hidden && audioCtxRef.current?.state === "suspended") {
+        audioCtxRef.current.resume().catch(() => {});
+      }
     };
     document.addEventListener("visibilitychange", handler);
     return () => document.removeEventListener("visibilitychange", handler);
@@ -1134,6 +1136,7 @@ export default function PomodoroTimer() {
     export:       de ? "Exportieren" : "Export data",
     autoDark:     de ? "Auto Dark-Mode" : "Auto dark mode",
     clockSizeLbl: de ? "Uhrgröße"   : "Clock size",
+    uiScaleLbl:   de ? "UI-Größe"   : "UI scale",
     bgStyleLbl:   de ? "Hintergrund" : "Background",
     autoStop:     de ? "Sound-Timer" : "Sound timer",
     mixRatio:     de ? "Mix-Anteil"  : "Mix ratio",
@@ -1210,6 +1213,7 @@ export default function PomodoroTimer() {
       padding: "20px 22px 18px",
       animation: "panelFade 0.18s ease-out",
       boxShadow: T.shadow,
+      zoom: uiZoom,
     },
     sectionLabel: {
       fontSize: 10, fontWeight: 600, letterSpacing: "0.14em",
@@ -1237,6 +1241,8 @@ export default function PomodoroTimer() {
   const isMobile = useMemo(() =>
     /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || window.innerWidth < 768
   , []);
+
+  const uiZoom = settings.uiScale === "S" ? 0.85 : settings.uiScale === "L" ? 1.18 : 1;
 
   return (
     <div className="relative flex items-center justify-center"
@@ -1352,7 +1358,7 @@ export default function PomodoroTimer() {
       )}
 
       {/* Main card */}
-      <div className="flex flex-col items-center" style={{ width: 380, gap: 30, position: "relative" }}>
+      <div className="flex flex-col items-center" style={{ width: 380, gap: 30, position: "relative", zoom: uiZoom }}>
 
         {/* Wordmark */}
         <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.22em", textTransform: "uppercase", color: T.textDim2, marginBottom: -18 }}>
@@ -1747,15 +1753,14 @@ export default function PomodoroTimer() {
               <div style={{ marginBottom: 16 }}>
                 {/* Volume row */}
                 <div style={{ background: T.tabBg, borderRadius: 10, padding: "9px 12px", marginBottom: 6 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                    <span style={{ fontSize: 13, color: T.text, flexShrink: 0 }}>{de ? "Lautstärke" : "Volume"}</span>
-                    <span style={{ fontSize: 11, flexShrink: 0 }}>{settings.ambientVolume === 0 ? "🔇" : settings.ambientVolume < 0.4 ? "🔈" : "🔉"}</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
+                    <span style={{ fontSize: 13, color: T.text, flexShrink: 0 }}>{settings.ambientVolume === 0 ? "🔇" : settings.ambientVolume < 0.4 ? "🔈" : "🔉"}</span>
                     <input type="range" min={0} max={1} step={0.01}
                       value={settings.ambientVolume}
                       onChange={e => setSettings(s => ({ ...s, ambientVolume: Number(e.target.value) }))}
-                      style={{ flex: 1, accentColor: T.accent, cursor: "pointer", height: 3 }}
+                      style={{ flex: 1, minWidth: 0, accentColor: T.accent, cursor: "pointer", height: 3 }}
                       aria-label="Ambient volume" />
-                    <span style={{ fontSize: 11, color: T.textDim, width: 28, textAlign: "right", flexShrink: 0 }}>
+                    <span style={{ fontSize: 11, color: T.textDim, width: 34, textAlign: "right", flexShrink: 0 }}>
                       {Math.round(settings.ambientVolume * 100)}%
                     </span>
                   </div>
@@ -1811,7 +1816,13 @@ export default function PomodoroTimer() {
                           <span style={{ fontSize: 10, color: T.textDim, letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 600 }}>Mix</span>
                           <div style={{ flex: 1, height: 1, background: T.border }} />
                           {settings.ambientMix !== "off" && (
-                            <button onClick={() => setSettings(s => ({ ...s, ambientMix: "off" }))}
+                            <button onClick={() => {
+                              // Stop the playing mix sound immediately regardless of preview/run state
+                              isPreviewingMixRef.current = false;
+                              if (previewMixTimeoutRef.current) { clearTimeout(previewMixTimeoutRef.current); previewMixTimeoutRef.current = null; }
+                              stopAmbientMix();
+                              setSettings(s => ({ ...s, ambientMix: "off" }));
+                            }}
                               style={{ fontSize: 11, color: T.textDim, background: "none", border: "none", cursor: "pointer", padding: 0, lineHeight: 1 }}>✕</button>
                           )}
                         </div>
@@ -2038,6 +2049,21 @@ export default function PomodoroTimer() {
                     style={{ padding: "3px 10px", fontSize: 11, fontWeight: 600, cursor: "pointer", border: "none",
                       background: settings.clockSize === sz ? T.accent : "transparent",
                       color: settings.clockSize === sz ? T.bg : T.textMid,
+                      transition: "all 0.15s", fontFamily: "'DM Sans', sans-serif" }}>
+                    {sz}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
+              padding: "9px 12px", borderBottom: `1px solid ${T.border}` }}>
+              <span style={{ fontSize: 13, color: T.text }}>{i18n.uiScaleLbl}</span>
+              <div style={{ display: "flex", borderRadius: 7, overflow: "hidden", border: `1px solid ${T.border}` }}>
+                {["S","M","L"].map(sz => (
+                  <button key={sz} onClick={() => setSettings(s => ({ ...s, uiScale: sz }))}
+                    style={{ padding: "3px 10px", fontSize: 11, fontWeight: 600, cursor: "pointer", border: "none",
+                      background: settings.uiScale === sz ? T.accent : "transparent",
+                      color: settings.uiScale === sz ? T.bg : T.textMid,
                       transition: "all 0.15s", fontFamily: "'DM Sans', sans-serif" }}>
                     {sz}
                   </button>
