@@ -1205,6 +1205,8 @@ export default function PomodoroTimer() {
   const totalSess = totals.sessions ?? 0;
   const currentLevel = [...LEVELS].reverse().find(l => totalSess >= l.min) || LEVELS[0];
 
+  const uiZoom = settings.uiScale === "S" ? 0.85 : settings.uiScale === "L" ? 1.18 : 1;
+
   // Shared styles
   const S = {
     panel: {
@@ -1241,8 +1243,6 @@ export default function PomodoroTimer() {
   const isMobile = useMemo(() =>
     /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || window.innerWidth < 768
   , []);
-
-  const uiZoom = settings.uiScale === "S" ? 0.85 : settings.uiScale === "L" ? 1.18 : 1;
 
   return (
     <div className="relative flex items-center justify-center"
