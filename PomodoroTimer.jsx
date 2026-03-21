@@ -1539,7 +1539,7 @@ export default function PomodoroTimer() {
       </button>}
 
       {/* Bottom-right: tasks + settings */}
-      <div style={{ position: "fixed", bottom: "max(20px, env(safe-area-inset-bottom, 20px))", right: 24, display: "flex", gap: 2 }}>
+      <div style={{ position: "fixed", bottom: "max(20px, env(safe-area-inset-bottom, 20px))", right: 24, display: "flex", gap: 2, zIndex: 40 }}>
         <button onClick={() => { setShowTasks(s => !s); setShowSettings(false); }}
           aria-label="Toggle task list"
           style={{ width: 36, height: 36, borderRadius: "50%", background: "transparent", border: "none",
@@ -2077,24 +2077,6 @@ export default function PomodoroTimer() {
             }} style={{ width: "100%", padding: "10px 12px", background: "none", border: "none",
               textAlign: "left", fontSize: 13, color: "#e05050", cursor: "pointer", fontFamily: "inherit" }}>
               {de ? "Statistiken zurücksetzen" : "Reset statistics"}
-            </button>
-            <button onClick={() => {
-              const rows = [["Datum","Sessions"]];
-              Object.entries(weekData).sort().forEach(([d, c]) => rows.push([d, c]));
-              rows.push([]);
-              rows.push(["Gesamt Sessions", totals.sessions ?? 0]);
-              rows.push(["Fokus Minuten", totals.minutes ?? 0]);
-              rows.push(["Längste Serie", totals.longestStreak ?? 0]);
-              const csv = rows.map(r => r.join(",")).join("\n");
-              const blob = new Blob([csv], { type: "text/csv" });
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement("a"); a.href = url;
-              a.download = `focus-partner-${todayStr()}.csv`; a.click();
-              URL.revokeObjectURL(url);
-            }} style={{ width: "100%", padding: "10px 12px", background: "none", border: "none",
-              textAlign: "left", fontSize: 13, color: T.textMid, cursor: "pointer", fontFamily: "inherit",
-              borderTop: `1px solid ${T.border}` }}>
-              {de ? "Statistiken exportieren (CSV)" : "Export statistics (CSV)"}
             </button>
           </div>
 
