@@ -7,6 +7,7 @@ const STORAGE_KEY = "pomodoro_data";
 const WEEK_KEY = "pomodoro_week";
 const TASKS_KEY = "focus_tasks";
 const TOTALS_KEY = "focus_totals";
+const PRESETS_KEY = "focus_presets";
 
 const getDuration = (mode, s) =>
   ({ focus: s.focus, shortBreak: s.shortBreak, longBreak: s.longBreak }[mode] * 60);
@@ -66,6 +67,14 @@ function saveTotals(data) {
   try { localStorage.setItem(TOTALS_KEY, JSON.stringify(data)); } catch {}
 }
 
+function loadPresets() {
+  try { return JSON.parse(localStorage.getItem(PRESETS_KEY) || "[null,null,null]"); } catch { return [null, null, null]; }
+}
+
+function savePresetsData(data) {
+  try { localStorage.setItem(PRESETS_KEY, JSON.stringify(data)); } catch {}
+}
+
 function DurationInput({ value, onChange, max = 60, style }) {
   const [local, setLocal] = useState(String(value));
   useEffect(() => { setLocal(String(value)); }, [value]);
@@ -117,6 +126,7 @@ export default function PomodoroTimer() {
   const [streak, setStreak] = useState(() => loadDailyData().streak);
   const [weekData, setWeekData] = useState(() => loadWeekData());
   const [totals, setTotals] = useState(() => loadTotals());
+  const [presets, setPresets] = useState(() => loadPresets());
 
   const [minimalMode, setMinimalMode] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -1009,6 +1019,21 @@ export default function PomodoroTimer() {
   }, [weekData, todaySessions, de]);
   const weekMax = Math.max(...last7Days.map(d => d.count), 1);
 
+  // Level system
+  const LEVELS = [
+    { min: 0,   icon: "🌱", name: de ? "Sämling"  : "Seedling", next: 5   },
+    { min: 5,   icon: "🌿", name: de ? "Spross"   : "Sprout",   next: 15  },
+    { min: 15,  icon: "🌲", name: de ? "Baum"     : "Tree",     next: 30  },
+    { min: 30,  icon: "🌳", name: de ? "Wald"     : "Forest",   next: 60  },
+    { min: 60,  icon: "🦦", name: de ? "Meister"  : "Elder",    next: 100 },
+    { min: 100, icon: "✨", name: de ? "Legende"  : "Legend",   next: null },
+  ];
+  const totalSess = totals.sessions ?? 0;
+  const currentLevel = [...LEVELS].reverse().find(l => totalSess >= l.min) || LEVELS[0];
+  const levelPct = currentLevel.next
+    ? Math.min(100, ((totalSess - currentLevel.min) / (currentLevel.next - currentLevel.min)) * 100)
+    : 100;
+
   // Shared styles
   const S = {
     panel: {
@@ -1229,6 +1254,14 @@ export default function PomodoroTimer() {
               ×{sessions}
             </span>
             <span style={{ color: T.textDim }}>{sessions === 1 ? i18n.session1 : i18n.sessions}</span>
+            {totalSess > 0 && (
+              <span title={`${totalSess} ${de ? "Sessions gesamt" : "total sessions"} · ${currentLevel.next ? `${totalSess}/${currentLevel.next}` : "Max"}`}
+                style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 11,
+                  color: T.textDim2, borderLeft: `1px solid ${T.border}`, paddingLeft: 10, cursor: "default" }}>
+                <span>{currentLevel.icon}</span>
+                <span style={{ letterSpacing: "0.03em" }}>{currentLevel.name}</span>
+              </span>
+            )}
           </div>
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
             <div style={{ width: 200, height: 4, background: T.barEmpty, borderRadius: 4, overflow: "hidden" }}>
@@ -1241,6 +1274,18 @@ export default function PomodoroTimer() {
               {Math.round(progressPct)}% {i18n.percent}
             </div>
           </div>
+          {totalSess > 0 && currentLevel.next && (
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
+              <div style={{ width: 200, height: 3, background: T.barEmpty, borderRadius: 3, overflow: "hidden" }}>
+                <div style={{ height: "100%", width: `${levelPct}%`, borderRadius: 3,
+                  background: `${T.accent}88`, transition: "width 0.6s ease-out" }} />
+              </div>
+              <span style={{ fontSize: 9, color: T.textDim2, letterSpacing: "0.07em" }}>
+                {currentLevel.icon} → {[...LEVELS].find(l => l.min === currentLevel.next)?.icon} · {totalSess} / {currentLevel.next}
+              </span>
+            </div>
+          )}
+
           <div className="flex items-center" style={{ gap: 10, fontSize: 11, color: T.textDim }}>
             {streak > 0 && (
               <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
@@ -1446,6 +1491,71 @@ export default function PomodoroTimer() {
       {/* Settings panel */}
       {showSettings && (
         <div style={{ ...S.panel, bottom: 66, right: 20, width: 284, maxHeight: "calc(100vh - 120px)", overflowY: "auto" }}>
+
+          {/* ── Presets ── */}
+          <p style={{ ...S.sectionLabel, marginBottom: 8 }}>{de ? "Profile" : "Presets"}</p>
+          <div style={{ display: "flex", gap: 5, marginBottom: 16 }}>
+            {presets.map((p, idx) => {
+              const savePreset = () => {
+                const snap = {
+                  label: `${de ? "Profil" : "Preset"} ${idx + 1}`,
+                  focus: settings.focus, shortBreak: settings.shortBreak, longBreak: settings.longBreak,
+                  ambient: settings.ambient, ambientCategory: settings.ambientCategory,
+                  ambientMix: settings.ambientMix, accentColor: settings.accentColor,
+                  lightMode: settings.lightMode,
+                };
+                const next = [...presets]; next[idx] = snap;
+                setPresets(next); savePresetsData(next);
+              };
+              const loadPreset = () => {
+                if (!p) return;
+                setSettings(s => ({ ...s,
+                  focus: p.focus, shortBreak: p.shortBreak, longBreak: p.longBreak,
+                  ambient: p.ambient, ambientCategory: p.ambientCategory,
+                  ambientMix: p.ambientMix ?? "off", accentColor: p.accentColor,
+                  lightMode: p.lightMode,
+                }));
+              };
+              const deletePreset = (e) => {
+                e.stopPropagation();
+                const next = [...presets]; next[idx] = null;
+                setPresets(next); savePresetsData(next);
+              };
+              return (
+                <div key={idx} style={{ flex: 1, position: "relative" }}>
+                  {p ? (
+                    <>
+                      <button onClick={loadPreset}
+                        style={{ width: "100%", padding: "6px 4px", borderRadius: 8, fontSize: 10, cursor: "pointer",
+                          background: T.tabBg, border: `1px solid ${T.border}`, color: T.textMid,
+                          display: "flex", flexDirection: "column", alignItems: "center", gap: 2, transition: "border-color 0.15s" }}
+                        onMouseEnter={e => e.currentTarget.style.borderColor = T.accent}
+                        onMouseLeave={e => e.currentTarget.style.borderColor = T.border}>
+                        <span style={{ width: 10, height: 10, borderRadius: "50%", background: p.accentColor, flexShrink: 0 }} />
+                        <span style={{ fontSize: 9, color: T.textDim2 }}>{p.focus}m</span>
+                      </button>
+                      <button onClick={deletePreset}
+                        style={{ position: "absolute", top: -4, right: -4, width: 14, height: 14, borderRadius: "50%",
+                          background: T.inputBg, border: `1px solid ${T.border}`, color: T.textDim, fontSize: 9,
+                          cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1 }}>
+                        ✕
+                      </button>
+                    </>
+                  ) : (
+                    <button onClick={savePreset}
+                      style={{ width: "100%", padding: "6px 4px", borderRadius: 8, fontSize: 10, cursor: "pointer",
+                        background: "transparent", border: `1px dashed ${T.border}`, color: T.textDim2,
+                        display: "flex", flexDirection: "column", alignItems: "center", gap: 2, transition: "border-color 0.15s" }}
+                      onMouseEnter={e => e.currentTarget.style.borderColor = T.textDim}
+                      onMouseLeave={e => e.currentTarget.style.borderColor = T.border}>
+                      <span style={{ fontSize: 13 }}>+</span>
+                      <span style={{ fontSize: 9 }}>{de ? "Speichern" : "Save"}</span>
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
 
           {/* ── Timer ── */}
           <p style={{ ...S.sectionLabel, marginBottom: 8 }}>{de ? "Timer" : "Timer"}</p>
