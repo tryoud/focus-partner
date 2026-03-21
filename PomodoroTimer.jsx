@@ -8,6 +8,34 @@ const WEEK_KEY = "pomodoro_week";
 const TASKS_KEY = "focus_tasks";
 const TOTALS_KEY = "focus_totals";
 const PRESETS_KEY = "focus_presets";
+const SETTINGS_KEY = "focus_settings";
+
+const DEFAULT_SETTINGS = {
+  focus: 25, shortBreak: 5, longBreak: 15,
+  autoStart: false, sound: true, tick: false, longBreakInterval: 4,
+  ambient: "off", ambientMix: "off", ambientCategory: "neural", dailyGoal: 8,
+  eq: { sub: 0, bass: 0, lowMid: 0, mid: 0, upperMid: 0, presence: 0, air: 0 },
+  eqMode: "basic",
+  ambientVolume: 0.75,
+  lightMode: false,
+  lang: "de",
+  accentColor: "#e07b39",
+};
+
+function loadSettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}");
+    // Deep merge: saved values override defaults (handles new keys added in updates)
+    // Reset ambient to "off" on load — browser blocks AudioContext autoplay without user gesture
+    return {
+      ...DEFAULT_SETTINGS,
+      ...saved,
+      eq: { ...DEFAULT_SETTINGS.eq, ...(saved.eq || {}) },
+      ambient: "off",
+      ambientMix: "off",
+    };
+  } catch { return { ...DEFAULT_SETTINGS }; }
+}
 
 const getDuration = (mode, s) =>
   ({ focus: s.focus, shortBreak: s.shortBreak, longBreak: s.longBreak }[mode] * 60);
@@ -97,18 +125,8 @@ function DurationInput({ value, onChange, max = 60, style }) {
 
 export default function PomodoroTimer() {
   const [mode, setMode] = useState("focus");
-  const [settings, setSettings] = useState({
-    focus: 25, shortBreak: 5, longBreak: 15,
-    autoStart: false, sound: true, tick: false, longBreakInterval: 4,
-    ambient: "off", ambientMix: "off", ambientCategory: "neural", dailyGoal: 8,
-    eq: { sub: 0, bass: 0, lowMid: 0, mid: 0, upperMid: 0, presence: 0, air: 0 },
-    eqMode: "basic",
-    ambientVolume: 0.75,
-    lightMode: false,
-    lang: "de",
-    accentColor: "#e07b39",
-  });
-  const [timeLeft, setTimeLeft] = useState(25 * 60);
+  const [settings, setSettings] = useState(() => loadSettings());
+  const [timeLeft, setTimeLeft] = useState(() => { const s = loadSettings(); return s.focus * 60; });
   const [isRunning, setIsRunning] = useState(false);
   const [sessions, setSessions] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
@@ -210,6 +228,11 @@ export default function PomodoroTimer() {
     document.title = "Focus Partner";
   }, []);
 
+  // Persist settings
+  useEffect(() => {
+    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch {}
+  }, [settings]);
+
   // Persist tasks
   useEffect(() => {
     try { localStorage.setItem(TASKS_KEY, JSON.stringify(tasks)); } catch {}
@@ -264,30 +287,11 @@ export default function PomodoroTimer() {
     } catch (_) {}
   }, [getCtx]);
 
-  // Ambient
-  const stopAmbient = useCallback(() => {
-    const a = ambientRef.current;
+  // Ambient — shared fade-out helper
+  const stopAmbientRef = useCallback((ref) => {
+    const a = ref.current;
     if (!a) return;
-    ambientRef.current = null;
-    if (a.intervalId != null) clearInterval(a.intervalId);
-    if (a.gain) {
-      try {
-        const ctx = getCtx();
-        const now = ctx.currentTime;
-        a.gain.gain.cancelScheduledValues(now);
-        a.gain.gain.setValueAtTime(a.gain.gain.value, now);
-        a.gain.gain.linearRampToValueAtTime(0, now + 0.4);
-        setTimeout(() => {
-          (a.nodes || []).forEach(n => { try { n.stop(); } catch (_) {} });
-        }, 450);
-      } catch (_) {}
-    }
-  }, [getCtx]);
-
-  const stopAmbientMix = useCallback(() => {
-    const a = ambientRef2.current;
-    if (!a) return;
-    ambientRef2.current = null;
+    ref.current = null;
     if (a.intervalId != null) clearInterval(a.intervalId);
     if (a.gain) {
       try {
@@ -300,6 +304,9 @@ export default function PomodoroTimer() {
       } catch (_) {}
     }
   }, [getCtx]);
+
+  const stopAmbient    = useCallback(() => stopAmbientRef(ambientRef),  [stopAmbientRef]);
+  const stopAmbientMix = useCallback(() => stopAmbientRef(ambientRef2), [stopAmbientRef]);
 
   // Lazy-create the 3-band EQ chain (persists across ambient changes)
   const getOrCreateEQ = useCallback((ctx) => {
@@ -800,12 +807,20 @@ export default function PomodoroTimer() {
         return updated;
       });
       const deLang = settingsRef.current.lang !== "en";
-      sendNotif(
-        deLang ? "🦦 Focus abgeschlossen!" : "🦦 Focus complete!",
-        deLang
-          ? `Weiter zu: ${nextMode === "longBreak" ? "Lange Pause" : "Kurze Pause"}`
-          : `Next: ${nextMode === "longBreak" ? "Long Break" : "Short Break"}`
-      );
+      const goalReached = newToday >= settingsRef.current.dailyGoal && curToday < settingsRef.current.dailyGoal;
+      if (goalReached) {
+        sendNotif(
+          deLang ? "🎉 Tagesziel erreicht!" : "🎉 Daily goal reached!",
+          deLang ? `${newToday} Sessions — gut gemacht!` : `${newToday} sessions — great work!`
+        );
+      } else {
+        sendNotif(
+          deLang ? "🦦 Focus abgeschlossen!" : "🦦 Focus complete!",
+          deLang
+            ? `Weiter zu: ${nextMode === "longBreak" ? "Lange Pause" : "Kurze Pause"}`
+            : `Next: ${nextMode === "longBreak" ? "Long Break" : "Short Break"}`
+        );
+      }
     } else {
       nextMode = "focus";
       const deLang = settingsRef.current.lang !== "en";
