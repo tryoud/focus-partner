@@ -1422,7 +1422,29 @@ export default function PomodoroTimer() {
             onMouseUp={e => (e.currentTarget.style.transform="scale(1)")}>
             {isRunning ? i18n.pause : i18n.start}
           </button>
-          <div style={{ width: 46 }} />
+          {(mode === "shortBreak" || mode === "longBreak") ? (
+            <button onClick={() => {
+              clearInterval(intervalRef.current);
+              setIsRunning(false);
+              completedRef.current = false;
+              setMode("focus"); modeRef.current = "focus";
+              resetRing();
+              setTimeLeft(getDuration("focus", settings));
+              triggerDigitPop();
+            }} aria-label="Skip break"
+              className="flex items-center justify-center"
+              style={{ width: 46, height: 46, borderRadius: "50%", background: T.inputBg,
+                border: `1px solid ${T.border}`, cursor: "pointer", color: T.textDim,
+                transition: "color 0.18s, background 0.18s, border-color 0.18s" }}
+              onMouseEnter={e => { e.currentTarget.style.color=T.text; e.currentTarget.style.background=T.tabActive; e.currentTarget.style.borderColor=T.inputBdr; }}
+              onMouseLeave={e => { e.currentTarget.style.color=T.textDim; e.currentTarget.style.background=T.inputBg; e.currentTarget.style.borderColor=T.border; }}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="5,4 15,12 5,20"/><line x1="19" y1="5" x2="19" y2="19"/>
+              </svg>
+            </button>
+          ) : (
+            <div style={{ width: 46 }} />
+          )}
         </div>
 
         {/* Breathing animation during breaks */}
