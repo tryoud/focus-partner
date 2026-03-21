@@ -22,9 +22,9 @@ const DEFAULT_SETTINGS = {
   lang: "de",
   accentColor: "#e07b39",
   autoDark: true,       // follow system prefers-color-scheme
-  ambientAutoStop: 0,   // 0=off, minutes until ambient stops (options: 30, 60, 120)
+
   ambientMixRatio: 0.5, // ratio for mix secondary sound (0=silent, 1=same as main)
-  clockSize: "M",       // "S" | "M" | "L" — timer clock font size
+
   uiScale: "M",         // "S" | "M" | "L" — overall UI zoom
   bgStyle: "none",      // "none" | "glow" | "dots" — subtle background texture
 };
@@ -713,15 +713,14 @@ export default function PomodoroTimer() {
     return () => { if (!isPreviewingMixRef.current) stopAmbientMix(); };
   }, [isRunning, settings.ambientMix, startAmbient, stopAmbientMix]);
 
-  // Ambient auto-stop after N minutes
+  // Hard 5-hour ambient cutoff — prevents accidental all-night playback
   useEffect(() => {
-    const mins = settings.ambientAutoStop;
-    if (!mins || settings.ambient === "off") return;
+    if (settings.ambient === "off") return;
     const id = setTimeout(() => {
       setSettings(s => ({ ...s, ambient: "off", ambientMix: "off" }));
-    }, mins * 60 * 1000);
+    }, 5 * 60 * 60 * 1000);
     return () => clearTimeout(id);
-  }, [settings.ambient, settings.ambientAutoStop]);
+  }, [settings.ambient]);
 
   // YouTube IFrame API — load once
   useEffect(() => {
@@ -1135,10 +1134,8 @@ export default function PomodoroTimer() {
     daySummary:   de ? "Tageszusammenfassung" : "Day Summary",
     export:       de ? "Exportieren" : "Export data",
     autoDark:     de ? "Auto Dark-Mode" : "Auto dark mode",
-    clockSizeLbl: de ? "Uhrgröße"   : "Clock size",
     uiScaleLbl:   de ? "UI-Größe"   : "UI scale",
     bgStyleLbl:   de ? "Hintergrund" : "Background",
-    autoStop:     de ? "Sound-Timer" : "Sound timer",
     mixRatio:     de ? "Mix-Anteil"  : "Mix ratio",
   };
   const modeLabels = {
@@ -1395,7 +1392,7 @@ export default function PomodoroTimer() {
           <div className="absolute inset-0 flex flex-col items-center justify-center"
             style={{ animation: digitPop ? "digitPop 0.42s cubic-bezier(0.34,1.56,0.64,1)" : "none" }}>
             <div style={{ fontFamily: "'DM Serif Display', serif",
-              fontSize: settings.clockSize === "S" ? "3.6rem" : settings.clockSize === "L" ? "6.2rem" : "4.8rem",
+              fontSize: "4.8rem",
               lineHeight: 1, color: T.text, letterSpacing: "-0.03em", userSelect: "none" }}>
               {mm}:{ss}
             </div>
@@ -1679,7 +1676,7 @@ export default function PomodoroTimer() {
 
       {/* Settings panel */}
       {showSettings && (
-        <div style={{ ...S.panel, bottom: 66, right: 20, width: 284, maxHeight: "calc(100dvh - 120px)", overflowY: "auto" }}>
+        <div style={{ ...S.panel, bottom: "max(66px, calc(env(safe-area-inset-bottom, 0px) + 66px))", right: 20, width: 284, maxHeight: `calc((100dvh - 100px) / ${uiZoom})`, overflowY: "auto" }}>
 
           {/* ── Timer ── */}
           <p style={{ ...S.sectionLabel, marginBottom: 8 }}>{de ? "Timer" : "Timer"}</p>
@@ -1766,23 +1763,7 @@ export default function PomodoroTimer() {
                   </div>
                 </div>
 
-                {/* Auto-stop row */}
-                <div style={{ background: T.tabBg, borderRadius: 10, padding: "9px 12px", marginBottom: 6 }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                    <span style={{ fontSize: 13, color: T.text }}>{i18n.autoStop}</span>
-                    <div style={{ display: "flex", borderRadius: 7, overflow: "hidden", border: `1px solid ${T.border}` }}>
-                      {[[0,"Off"],[30,"30m"],[60,"1h"],[120,"2h"]].map(([v, l]) => (
-                        <button key={v} onClick={() => setSettings(s => ({ ...s, ambientAutoStop: v }))}
-                          style={{ padding: "3px 8px", fontSize: 10, fontWeight: 600, cursor: "pointer", border: "none",
-                            background: settings.ambientAutoStop === v ? T.accent : "transparent",
-                            color: settings.ambientAutoStop === v ? T.bg : T.textDim,
-                            transition: "all 0.15s", fontFamily: "'DM Sans', sans-serif" }}>
-                          {l}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
+
 
                 {/* Off + category row */}
                 <div style={{ background: T.tabBg, borderRadius: 10, padding: "8px 10px", marginBottom: 6 }}>
@@ -2036,21 +2017,6 @@ export default function PomodoroTimer() {
                       color: settings.lang === l ? T.bg : T.textMid,
                       transition: "all 0.15s", fontFamily: "'DM Sans', sans-serif" }}>
                     {l.toUpperCase()}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
-              padding: "9px 12px", borderBottom: `1px solid ${T.border}` }}>
-              <span style={{ fontSize: 13, color: T.text }}>{i18n.clockSizeLbl}</span>
-              <div style={{ display: "flex", borderRadius: 7, overflow: "hidden", border: `1px solid ${T.border}` }}>
-                {["S","M","L"].map(sz => (
-                  <button key={sz} onClick={() => setSettings(s => ({ ...s, clockSize: sz }))}
-                    style={{ padding: "3px 10px", fontSize: 11, fontWeight: 600, cursor: "pointer", border: "none",
-                      background: settings.clockSize === sz ? T.accent : "transparent",
-                      color: settings.clockSize === sz ? T.bg : T.textMid,
-                      transition: "all 0.15s", fontFamily: "'DM Sans', sans-serif" }}>
-                    {sz}
                   </button>
                 ))}
               </div>
