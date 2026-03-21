@@ -540,6 +540,10 @@ export default function PomodoroTimer() {
     if (volumeGainRef.current) {
       volumeGainRef.current.gain.setTargetAtTime(settings.ambientVolume, audioCtxRef.current?.currentTime ?? 0, 0.02);
     }
+    // Sync YouTube player volume (brain.fm — separate audio system)
+    if (ytPlayerRef.current && typeof ytPlayerRef.current.setVolume === "function") {
+      ytPlayerRef.current.setVolume(Math.round(settings.ambientVolume * 100));
+    }
   }, [settings.ambientVolume]);
 
   // Fade ambient in/out when timer starts/stops
@@ -1544,7 +1548,7 @@ export default function PomodoroTimer() {
                             videoId: vid,
                             playerVars: { autoplay: 1, controls: 0, rel: 0, modestbranding: 1, playsinline: 1 },
                             events: {
-                              onReady: (e) => { e.target.setVolume(100); e.target.playVideo(); setYtActivated(true); ytActivatedRef.current = true; },
+                              onReady: (e) => { e.target.setVolume(Math.round(settingsRef.current.ambientVolume * 100)); e.target.playVideo(); setYtActivated(true); ytActivatedRef.current = true; },
                               onStateChange: (e) => { if (e.data === 0) { e.target.seekTo(0); e.target.playVideo(); } },
                             },
                           });
