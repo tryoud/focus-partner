@@ -1077,7 +1077,7 @@ export default function PomodoroTimer() {
   const ss = String(timeLeft % 60).padStart(2, "0");
   const tabIdx = MODES.indexOf(mode);
   const activeTask = tasks.find(t => !t.done);
-  const sessionProgress = (mode === "focus" && isRunning) ? (1 - progress) : 0;
+  const sessionProgress = (mode === "focus" && (isRunning || (!isRunning && progress < 1 && progress > 0))) ? (1 - progress) : 0;
   const progressPct = Math.min(100, ((todaySessions + sessionProgress) / settings.dailyGoal) * 100);
   const ringAnim = flash ? "ringFlash 0.95s ease-in-out"
     : isRunning ? "ringPulse 2.8s ease-in-out infinite" : "none";
