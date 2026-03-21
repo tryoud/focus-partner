@@ -184,10 +184,8 @@ export default function PomodoroTimer() {
 
   // Tab title
   useEffect(() => {
-    const m = String(Math.floor(timeLeft / 60)).padStart(2, "0");
-    const s = String(timeLeft % 60).padStart(2, "0");
-    document.title = `${mode === "focus" ? "🦦" : "☕"} ${m}:${s} — Focus Partner`;
-  }, [timeLeft, mode]);
+    document.title = "Focus Partner";
+  }, []);
 
   // Audio
   const getCtx = useCallback(() => {
