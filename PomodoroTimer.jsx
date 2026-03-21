@@ -26,7 +26,6 @@ const DEFAULT_SETTINGS = {
   ambientMixRatio: 0.5, // ratio for mix secondary sound (0=silent, 1=same as main)
 
   uiScale: "M",         // "S" | "M" | "L" — overall UI zoom
-  bgStyle: "none",      // "none" | "glow" | "dots" — subtle background texture
 };
 
 function loadSettings() {
@@ -1135,7 +1134,6 @@ export default function PomodoroTimer() {
     export:       de ? "Exportieren" : "Export data",
     autoDark:     de ? "Auto Dark-Mode" : "Auto dark mode",
     uiScaleLbl:   de ? "UI-Größe"   : "UI scale",
-    bgStyleLbl:   de ? "Hintergrund" : "Background",
     mixRatio:     de ? "Mix-Anteil"  : "Mix ratio",
   };
   const modeLabels = {
@@ -1251,16 +1249,6 @@ export default function PomodoroTimer() {
       <div style={{ position: "absolute", width: 600, height: 600, borderRadius: "50%",
         background: "radial-gradient(circle, rgba(224,123,57,0.04) 0%, transparent 70%)", pointerEvents: "none" }} />
 
-      {settings.bgStyle === "dots" && (
-        <div style={{ position: "fixed", inset: 0, pointerEvents: "none", zIndex: 0,
-          backgroundImage: `radial-gradient(circle, ${T.border} 1px, transparent 1px)`,
-          backgroundSize: "28px 28px", opacity: 0.5 }} />
-      )}
-      {settings.bgStyle === "mesh" && (
-        <div style={{ position: "fixed", inset: 0, pointerEvents: "none", zIndex: 0,
-          background: `linear-gradient(135deg, ${T.accent}06 0%, transparent 50%, ${T.accent}04 100%)`,
-          opacity: 0.7 }} />
-      )}
 
       {/* Minimal mode toggle — top-left */}
       <button
@@ -1283,8 +1271,8 @@ export default function PomodoroTimer() {
         </svg>
       </button>
 
-      {/* Fullscreen toggle — top-right (desktop only) */}
-      {!isMobile && <button
+      {/* Fullscreen toggle — top-right (desktop only, hidden when settings open) */}
+      {!isMobile && !showSettings && <button
         onClick={toggleFullscreen}
         aria-label={isFullscreen ? i18n.exitFs : i18n.fullscreen}
         title={isFullscreen ? i18n.exitFs : i18n.fullscreen}
@@ -2046,21 +2034,6 @@ export default function PomodoroTimer() {
                     style={{ width: 16, height: 16, borderRadius: "50%", background: c, border: "none",
                       cursor: "pointer", outline: settings.accentColor === c ? `2px solid ${c}` : "none",
                       outlineOffset: 2, transition: "outline 0.15s", flexShrink: 0 }} />
-                ))}
-              </div>
-            </div>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
-              padding: "9px 12px" }}>
-              <span style={{ fontSize: 13, color: T.text }}>{i18n.bgStyleLbl}</span>
-              <div style={{ display: "flex", borderRadius: 7, overflow: "hidden", border: `1px solid ${T.border}` }}>
-                {[["none","—"],["dots","···"],["mesh","▦"]].map(([v, l]) => (
-                  <button key={v} onClick={() => setSettings(s => ({ ...s, bgStyle: v }))}
-                    style={{ padding: "3px 10px", fontSize: 11, fontWeight: 600, cursor: "pointer", border: "none",
-                      background: settings.bgStyle === v ? T.accent : "transparent",
-                      color: settings.bgStyle === v ? T.bg : T.textMid,
-                      transition: "all 0.15s", fontFamily: "'DM Sans', sans-serif" }}>
-                    {l}
-                  </button>
                 ))}
               </div>
             </div>
