@@ -9,6 +9,7 @@ const TASKS_KEY = "focus_tasks";
 const TOTALS_KEY = "focus_totals";
 const PRESETS_KEY = "focus_presets";
 const SETTINGS_KEY = "focus_settings";
+const ACHIEVEMENTS_KEY = "focus_achievements";
 
 const DEFAULT_SETTINGS = {
   focus: 25, shortBreak: 5, longBreak: 15,
@@ -20,6 +21,11 @@ const DEFAULT_SETTINGS = {
   lightMode: false,
   lang: "de",
   accentColor: "#e07b39",
+  autoDark: true,       // follow system prefers-color-scheme
+  ambientAutoStop: 0,   // 0=off, minutes until ambient stops (options: 30, 60, 120)
+  ambientMixRatio: 0.5, // ratio for mix secondary sound (0=silent, 1=same as main)
+  clockSize: "M",       // "S" | "M" | "L" — timer clock font size
+  bgStyle: "none",      // "none" | "glow" | "dots" — subtle background texture
 };
 
 function loadSettings() {
@@ -107,6 +113,13 @@ function savePresetsData(data) {
   try { localStorage.setItem(PRESETS_KEY, JSON.stringify(data)); } catch {}
 }
 
+function loadAchievements() {
+  try { return JSON.parse(localStorage.getItem(ACHIEVEMENTS_KEY) || "[]"); } catch { return []; }
+}
+function saveAchievements(arr) {
+  try { localStorage.setItem(ACHIEVEMENTS_KEY, JSON.stringify(arr)); } catch {}
+}
+
 function DurationInput({ value, onChange, max = 60, style }) {
   const [local, setLocal] = useState(String(value));
   useEffect(() => { setLocal(String(value)); }, [value]);
@@ -127,12 +140,23 @@ function DurationInput({ value, onChange, max = 60, style }) {
   );
 }
 
+const ACHIEVEMENT_DEFS = [
+  { id: "first",    icon: "🎯", de: "Erste Session",        en: "First session",       check: (t) => (t.sessions ?? 0) >= 1   },
+  { id: "ten",      icon: "🏅", de: "10 Sessions",           en: "10 sessions",         check: (t) => (t.sessions ?? 0) >= 10  },
+  { id: "fifty",    icon: "⭐", de: "50 Sessions",           en: "50 sessions",         check: (t) => (t.sessions ?? 0) >= 50  },
+  { id: "hundred",  icon: "💯", de: "100 Sessions",          en: "100 sessions",        check: (t) => (t.sessions ?? 0) >= 100 },
+  { id: "streak3",  icon: "🔥", de: "3-Tage-Serie",          en: "3-day streak",        check: (t, s) => s >= 3 },
+  { id: "streak7",  icon: "⚡", de: "Wochenkrieger",         en: "Week warrior",        check: (t, s) => s >= 7 },
+  { id: "streak30", icon: "🌟", de: "Monats-Meister",        en: "Monthly master",      check: (t, s) => s >= 30 },
+  { id: "hours10",  icon: "⏱",  de: "10 Stunden Fokus",     en: "10 hours focused",    check: (t) => (t.minutes ?? 0) >= 600  },
+];
+
 export default function PomodoroTimer() {
   const [mode, setMode] = useState("focus");
   const [settings, setSettings] = useState(() => loadSettings());
   const [timeLeft, setTimeLeft] = useState(() => { const s = loadSettings(); return s.focus * 60; });
   const [isRunning, setIsRunning] = useState(false);
-  const [sessions, setSessions] = useState(() => loadDailyData().todaySessions);
+  const [breakCycleCount, setBreakCycleCount] = useState(() => loadDailyData().todaySessions);
   const [showSettings, setShowSettings] = useState(false);
   const [showTasks, setShowTasks] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
@@ -153,6 +177,10 @@ export default function PomodoroTimer() {
   const [minimalMode, setMinimalMode] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showWelcome, setShowWelcome] = useState(() => !localStorage.getItem("focus_welcomed"));
+  const [achievements, setAchievements] = useState(() => loadAchievements());
+  const [newAchievement, setNewAchievement] = useState(null); // { icon, name } for toast
+  const [showDaySummary, setShowDaySummary] = useState(false);
+  const [breathPhase, setBreathPhase] = useState("inhale"); // "inhale" | "hold" | "exhale"
 
   const [ytVideoId, setYtVideoId] = useState(null);
   const [ytActivated, setYtActivated] = useState(false);
@@ -170,7 +198,7 @@ export default function PomodoroTimer() {
   const previewMixTimeoutRef = useRef(null);
   const isPreviewingMixRef = useRef(false);
   const modeRef = useRef(mode);
-  const sessionsRef = useRef(sessions);
+  const sessionsRef = useRef(breakCycleCount);
   const settingsRef = useRef(settings);
   const isRunningRef = useRef(isRunning);
   const completedRef = useRef(false);
@@ -178,7 +206,7 @@ export default function PomodoroTimer() {
   const streakRef = useRef(streak);
 
   useEffect(() => { modeRef.current = mode; }, [mode]);
-  useEffect(() => { sessionsRef.current = sessions; }, [sessions]);
+  useEffect(() => { sessionsRef.current = breakCycleCount; }, [breakCycleCount]);
   useEffect(() => { settingsRef.current = settings; }, [settings]);
   useEffect(() => { isRunningRef.current = isRunning; }, [isRunning]);
   useEffect(() => { todaySessionsRef.current = todaySessions; }, [todaySessions]);
@@ -232,6 +260,16 @@ export default function PomodoroTimer() {
   useEffect(() => {
     document.title = "Focus Partner";
   }, []);
+
+  // Auto-dark: follow system prefers-color-scheme when autoDark is enabled
+  useEffect(() => {
+    if (!settings.autoDark) return;
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const apply = (e) => setSettings(s => ({ ...s, lightMode: !e.matches }));
+    apply(mq); // apply immediately
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
+  }, [settings.autoDark]);
 
   // Persist settings
   useEffect(() => {
@@ -350,7 +388,9 @@ export default function PomodoroTimer() {
       const nodes = [];
       const master = ctx.createGain();
       master.gain.setValueAtTime(0, ctx.currentTime);
-      master.connect(eq.bass); // master → EQ chain → destination
+      const scaleGain = ctx.createGain();
+      scaleGain.gain.value = isSecondary ? (settingsRef.current.ambientMixRatio ?? 0.5) : 1;
+      master.connect(scaleGain); scaleGain.connect(eq.sub ?? eq.bass); // master → scale → EQ chain → destination
 
       // ── helper: subtle "air" layer so EQ has full-spectrum content ──
       const addAir = (vol = 0.012) => {
@@ -573,8 +613,8 @@ export default function PomodoroTimer() {
         master.gain.linearRampToValueAtTime(0.24, ctx.currentTime + 3);
       }
 
-      if (isSecondary) ambientRef2.current = { nodes, gain: master };
-      else ambientRef.current = { nodes, gain: master };
+      if (isSecondary) ambientRef2.current = { nodes, gain: master, scaleGain };
+      else ambientRef.current = { nodes, gain: master, scaleGain };
     } catch (_) {}
   }, [getCtx, getOrCreateEQ, stopAmbient, stopAmbientMix]);
 
@@ -596,6 +636,15 @@ export default function PomodoroTimer() {
       ytPlayerRef.current.setVolume(Math.round(settings.ambientVolume * 100));
     }
   }, [settings.ambientVolume]);
+
+  // Live mix ratio update — scale secondary ambient when ratio changes
+  useEffect(() => {
+    if (ambientRef2.current?.scaleGain) {
+      ambientRef2.current.scaleGain.gain.setTargetAtTime(
+        settings.ambientMixRatio, audioCtxRef.current?.currentTime ?? 0, 0.05
+      );
+    }
+  }, [settings.ambientMixRatio]);
 
   // Fade ambient in/out when timer starts/stops
   useEffect(() => {
@@ -660,6 +709,16 @@ export default function PomodoroTimer() {
     }
     return () => { if (!isPreviewingMixRef.current) stopAmbientMix(); };
   }, [isRunning, settings.ambientMix, startAmbient, stopAmbientMix]);
+
+  // Ambient auto-stop after N minutes
+  useEffect(() => {
+    const mins = settings.ambientAutoStop;
+    if (!mins || settings.ambient === "off") return;
+    const id = setTimeout(() => {
+      setSettings(s => ({ ...s, ambient: "off", ambientMix: "off" }));
+    }, mins * 60 * 1000);
+    return () => clearTimeout(id);
+  }, [settings.ambient, settings.ambientAutoStop]);
 
   // YouTube IFrame API — load once
   useEffect(() => {
@@ -733,6 +792,10 @@ export default function PomodoroTimer() {
         if (!document.fullscreenElement) setMinimalMode(false);
       }
       else if (e.key === "?") setShowShortcuts(s => !s);
+      else if (e.key === "s" || e.key === "S") {
+        setShowSettings(s => !s);
+        setShowTasks(false);
+      }
     };
     const switchModeKey = (m) => {
       if (modeRef.current === m) return;
@@ -746,6 +809,31 @@ export default function PomodoroTimer() {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [getCtx]);
+
+  // Touch swipe — left/right to switch modes
+  useEffect(() => {
+    let startX = 0;
+    const onStart = (e) => { startX = e.touches[0].clientX; };
+    const onEnd = (e) => {
+      const diff = e.changedTouches[0].clientX - startX;
+      if (Math.abs(diff) < 60) return;
+      const idx = MODES.indexOf(modeRef.current);
+      const next = diff < 0 ? Math.min(idx + 1, MODES.length - 1) : Math.max(idx - 1, 0);
+      if (next === idx) return;
+      clearInterval(intervalRef.current);
+      setIsRunning(false); completedRef.current = false;
+      setMode(MODES[next]); modeRef.current = MODES[next];
+      setRingTransition(false); setTimeout(() => setRingTransition(true), 60);
+      setTimeLeft(getDuration(MODES[next], settingsRef.current));
+      setDigitPop(true); setTimeout(() => setDigitPop(false), 420);
+    };
+    window.addEventListener("touchstart", onStart, { passive: true });
+    window.addEventListener("touchend", onEnd, { passive: true });
+    return () => {
+      window.removeEventListener("touchstart", onStart);
+      window.removeEventListener("touchend", onEnd);
+    };
+  }, []);
 
   const resetRing = useCallback(() => {
     setRingTransition(false);
@@ -780,7 +868,7 @@ export default function PomodoroTimer() {
 
     if (m === "focus") {
       newSess = sess + 1;
-      setSessions(newSess);
+      setBreakCycleCount(newSess);
       nextMode = newSess % (settingsRef.current.longBreakInterval || 4) === 0 ? "longBreak" : "shortBreak";
       newToday = curToday + 1;
       if (curToday === 0) {
@@ -801,6 +889,7 @@ export default function PomodoroTimer() {
         saveWeekData(updated);
         return updated;
       });
+      let updatedTotals;
       setTotals(prev => {
         const focusMinutes = Math.round(settingsRef.current.focus);
         const updated = {
@@ -809,7 +898,31 @@ export default function PomodoroTimer() {
           longestStreak: Math.max(prev.longestStreak ?? 0, newStreak),
         };
         saveTotals(updated);
+        updatedTotals = updated;
         return updated;
+      });
+      // Check achievements
+      setAchievements(prev => {
+        const earned = [...prev];
+        let newlyEarned = null;
+        const checkTotals = updatedTotals || {};
+        ACHIEVEMENT_DEFS.forEach(def => {
+          if (!earned.includes(def.id) && def.check(checkTotals, newStreak)) {
+            earned.push(def.id);
+            newlyEarned = def;
+          }
+        });
+        if (newlyEarned) {
+          saveAchievements(earned);
+          const deLangAch = settingsRef.current.lang !== "en";
+          setTimeout(() => {
+            setNewAchievement({ icon: newlyEarned.icon, name: deLangAch ? newlyEarned.de : newlyEarned.en });
+            setTimeout(() => setNewAchievement(null), 3500);
+          }, 1200);
+        } else {
+          saveAchievements(earned);
+        }
+        return earned;
       });
       const deLang = settingsRef.current.lang !== "en";
       const goalReached = newToday >= settingsRef.current.dailyGoal && curToday < settingsRef.current.dailyGoal;
@@ -818,6 +931,7 @@ export default function PomodoroTimer() {
           deLang ? "🎉 Tagesziel erreicht!" : "🎉 Daily goal reached!",
           deLang ? `${newToday} Sessions — gut gemacht!` : `${newToday} sessions — great work!`
         );
+        setTimeout(() => setShowDaySummary(true), 1800);
       } else {
         sendNotif(
           deLang ? "🦦 Focus abgeschlossen!" : "🦦 Focus complete!",
@@ -905,6 +1019,32 @@ export default function PomodoroTimer() {
     return () => document.removeEventListener("fullscreenchange", onFsChange);
   }, []);
 
+  // Media Session API — OS media controls (lock screen, media keys)
+  useEffect(() => {
+    if (!("mediaSession" in navigator)) return;
+    navigator.mediaSession.metadata = new window.MediaMetadata({
+      title: "Focus Partner",
+      artist: mode === "focus" ? "Fokus-Session" : mode === "shortBreak" ? "Kurze Pause" : "Lange Pause",
+      album: "🦦 Focus Partner",
+    });
+    navigator.mediaSession.playbackState = isRunning ? "playing" : "paused";
+    navigator.mediaSession.setActionHandler("play",  () => setIsRunning(true));
+    navigator.mediaSession.setActionHandler("pause", () => setIsRunning(false));
+  }, [isRunning, mode]);
+
+  // Breathing cycle during breaks (4s inhale → 4s exhale)
+  useEffect(() => {
+    if (!isRunning || mode === "focus") { setBreathPhase("inhale"); return; }
+    let phase = "inhale";
+    setBreathPhase("inhale");
+    const cycle = () => {
+      phase = phase === "inhale" ? "exhale" : "inhale";
+      setBreathPhase(phase);
+    };
+    const id = setInterval(cycle, 4000);
+    return () => clearInterval(id);
+  }, [isRunning, mode]);
+
   const updateDuration = (key, v) => {
     setSettings(s => ({ ...s, [key]: v }));
     if (mode === key && !isRunning) { resetRing(); setTimeLeft(v * 60); }
@@ -986,6 +1126,16 @@ export default function PomodoroTimer() {
     totalSess:    de ? "Sessions" : "Sessions",
     totalHours:   de ? "Std." : "hrs",
     totalStreak:  de ? "Längste Serie" : "Best streak",
+    breathIn:     de ? "Einatmen"    : "Breathe in",
+    breathOut:    de ? "Ausatmen"    : "Breathe out",
+    achievements: de ? "Erfolge"     : "Achievements",
+    daySummary:   de ? "Tageszusammenfassung" : "Day Summary",
+    export:       de ? "Exportieren" : "Export data",
+    autoDark:     de ? "Auto Dark-Mode" : "Auto dark mode",
+    clockSizeLbl: de ? "Uhrgröße"   : "Clock size",
+    bgStyleLbl:   de ? "Hintergrund" : "Background",
+    autoStop:     de ? "Sound-Timer" : "Sound timer",
+    mixRatio:     de ? "Mix-Anteil"  : "Mix ratio",
   };
   const modeLabels = {
     focus:      de ? "Fokus"         : "Focus",
@@ -1050,9 +1200,6 @@ export default function PomodoroTimer() {
   ];
   const totalSess = totals.sessions ?? 0;
   const currentLevel = [...LEVELS].reverse().find(l => totalSess >= l.min) || LEVELS[0];
-  const levelPct = currentLevel.next
-    ? Math.min(100, ((totalSess - currentLevel.min) / (currentLevel.next - currentLevel.min)) * 100)
-    : 100;
 
   // Shared styles
   const S = {
@@ -1093,6 +1240,17 @@ export default function PomodoroTimer() {
       {/* Glow */}
       <div style={{ position: "absolute", width: 600, height: 600, borderRadius: "50%",
         background: "radial-gradient(circle, rgba(224,123,57,0.04) 0%, transparent 70%)", pointerEvents: "none" }} />
+
+      {settings.bgStyle === "dots" && (
+        <div style={{ position: "fixed", inset: 0, pointerEvents: "none", zIndex: 0,
+          backgroundImage: `radial-gradient(circle, ${T.border} 1px, transparent 1px)`,
+          backgroundSize: "28px 28px", opacity: 0.5 }} />
+      )}
+      {settings.bgStyle === "mesh" && (
+        <div style={{ position: "fixed", inset: 0, pointerEvents: "none", zIndex: 0,
+          background: `linear-gradient(135deg, ${T.accent}06 0%, transparent 50%, ${T.accent}04 100%)`,
+          opacity: 0.7 }} />
+      )}
 
       {/* Minimal mode toggle — top-left */}
       <button
@@ -1170,6 +1328,7 @@ export default function PomodoroTimer() {
               ["Space", de ? "Start / Pause" : "Start / Pause"],
               ["R",     de ? "Reset"          : "Reset"],
               ["N",     de ? "Task abhaken"   : "Check off task"],
+              ["S",     de ? "Einstellungen"  : "Settings"],
               ["1 / 2 / 3", de ? "Mode wechseln" : "Switch mode"],
               ["?",    de ? "Shortcuts"       : "Shortcuts"],
               ["Esc",  de ? "Panel schließen" : "Close panel"],
@@ -1222,8 +1381,9 @@ export default function PomodoroTimer() {
           </svg>
           <div className="absolute inset-0 flex flex-col items-center justify-center"
             style={{ animation: digitPop ? "digitPop 0.42s cubic-bezier(0.34,1.56,0.64,1)" : "none" }}>
-            <div style={{ fontFamily: "'DM Serif Display', serif", fontSize: "4.8rem", lineHeight: 1,
-              color: T.text, letterSpacing: "-0.03em", userSelect: "none" }}>
+            <div style={{ fontFamily: "'DM Serif Display', serif",
+              fontSize: settings.clockSize === "S" ? "3.6rem" : settings.clockSize === "L" ? "6.2rem" : "4.8rem",
+              lineHeight: 1, color: T.text, letterSpacing: "-0.03em", userSelect: "none" }}>
               {mm}:{ss}
             </div>
             <div
@@ -1265,6 +1425,24 @@ export default function PomodoroTimer() {
           </button>
           <div style={{ width: 46 }} />
         </div>
+
+        {/* Breathing animation during breaks */}
+        {(mode === "shortBreak" || mode === "longBreak") && isRunning && (
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+            <div style={{
+              width: breathPhase === "inhale" ? 48 : 28,
+              height: breathPhase === "inhale" ? 48 : 28,
+              borderRadius: "50%",
+              background: `${T.accent}22`,
+              border: `1.5px solid ${T.accent}55`,
+              transition: "width 4s ease-in-out, height 4s ease-in-out",
+              boxShadow: breathPhase === "inhale" ? `0 0 16px ${T.accent}30` : "none",
+            }} />
+            <span style={{ fontSize: 10, color: T.textDim2, letterSpacing: "0.12em", textTransform: "uppercase" }}>
+              {breathPhase === "inhale" ? i18n.breathIn : i18n.breathOut}
+            </span>
+          </div>
+        )}
 
         {/* Session progress + stats */}
         <div className="flex flex-col items-center" style={{ gap: 8 }}>
@@ -1641,6 +1819,24 @@ export default function PomodoroTimer() {
                   </div>
                 </div>
 
+                {/* Auto-stop row */}
+                <div style={{ background: T.tabBg, borderRadius: 10, padding: "9px 12px", marginBottom: 6 }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <span style={{ fontSize: 13, color: T.text }}>{i18n.autoStop}</span>
+                    <div style={{ display: "flex", borderRadius: 7, overflow: "hidden", border: `1px solid ${T.border}` }}>
+                      {[[0,"Off"],[30,"30m"],[60,"1h"],[120,"2h"]].map(([v, l]) => (
+                        <button key={v} onClick={() => setSettings(s => ({ ...s, ambientAutoStop: v }))}
+                          style={{ padding: "3px 8px", fontSize: 10, fontWeight: 600, cursor: "pointer", border: "none",
+                            background: settings.ambientAutoStop === v ? T.accent : "transparent",
+                            color: settings.ambientAutoStop === v ? T.bg : T.textDim,
+                            transition: "all 0.15s", fontFamily: "'DM Sans', sans-serif" }}>
+                          {l}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
                 {/* Off + category row */}
                 <div style={{ background: T.tabBg, borderRadius: 10, padding: "8px 10px", marginBottom: 6 }}>
                   <div style={{ display: "flex", gap: 5 }}>
@@ -1701,6 +1897,19 @@ export default function PomodoroTimer() {
                               </button>
                             ))}
                         </div>
+                        {settings.ambientMix !== "off" && (
+                          <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 7 }}>
+                            <span style={{ fontSize: 10, color: T.textDim2, flexShrink: 0 }}>{i18n.mixRatio}</span>
+                            <input type="range" min={0.1} max={1} step={0.05}
+                              value={settings.ambientMixRatio}
+                              onChange={e => setSettings(s => ({ ...s, ambientMixRatio: Number(e.target.value) }))}
+                              style={{ flex: 1, accentColor: T.accent, cursor: "pointer", height: 3 }}
+                              aria-label="Mix ratio" />
+                            <span style={{ fontSize: 10, color: T.textDim2, width: 26, flexShrink: 0 }}>
+                              {Math.round(settings.ambientMixRatio * 100)}%
+                            </span>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -1855,6 +2064,11 @@ export default function PomodoroTimer() {
           <div style={{ background: T.tabBg, borderRadius: 10 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
               padding: "9px 12px", borderBottom: `1px solid ${T.border}` }}>
+              <span style={{ fontSize: 13, color: T.text }}>{i18n.autoDark}</span>
+              <Toggle val={settings.autoDark} onToggle={() => setSettings(s => ({ ...s, autoDark: !s.autoDark }))} label="Auto dark" />
+            </div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
+              padding: "9px 12px", borderBottom: `1px solid ${T.border}` }}>
               <span style={{ fontSize: 13, color: T.text }}>{de ? "Hell-Modus" : "Light mode"}</span>
               <Toggle val={settings.lightMode} onToggle={() => setSettings(s => ({ ...s, lightMode: !s.lightMode }))} label="Light Mode" />
             </div>
@@ -1873,7 +2087,23 @@ export default function PomodoroTimer() {
                 ))}
               </div>
             </div>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 12px" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
+              padding: "9px 12px", borderBottom: `1px solid ${T.border}` }}>
+              <span style={{ fontSize: 13, color: T.text }}>{i18n.clockSizeLbl}</span>
+              <div style={{ display: "flex", borderRadius: 7, overflow: "hidden", border: `1px solid ${T.border}` }}>
+                {["S","M","L"].map(sz => (
+                  <button key={sz} onClick={() => setSettings(s => ({ ...s, clockSize: sz }))}
+                    style={{ padding: "3px 10px", fontSize: 11, fontWeight: 600, cursor: "pointer", border: "none",
+                      background: settings.clockSize === sz ? T.accent : "transparent",
+                      color: settings.clockSize === sz ? T.bg : T.textMid,
+                      transition: "all 0.15s", fontFamily: "'DM Sans', sans-serif" }}>
+                    {sz}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
+              padding: "9px 12px", borderBottom: `1px solid ${T.border}` }}>
               <span style={{ fontSize: 13, color: T.text }}>{de ? "Akzentfarbe" : "Accent"}</span>
               <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
                 {["#e07b39","#4a9eff","#7c5cbf","#3db87a","#e05555","#d4a017"].map(c => (
@@ -1885,21 +2115,69 @@ export default function PomodoroTimer() {
                 ))}
               </div>
             </div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
+              padding: "9px 12px" }}>
+              <span style={{ fontSize: 13, color: T.text }}>{i18n.bgStyleLbl}</span>
+              <div style={{ display: "flex", borderRadius: 7, overflow: "hidden", border: `1px solid ${T.border}` }}>
+                {[["none","—"],["dots","···"],["mesh","▦"]].map(([v, l]) => (
+                  <button key={v} onClick={() => setSettings(s => ({ ...s, bgStyle: v }))}
+                    style={{ padding: "3px 10px", fontSize: 11, fontWeight: 600, cursor: "pointer", border: "none",
+                      background: settings.bgStyle === v ? T.accent : "transparent",
+                      color: settings.bgStyle === v ? T.bg : T.textMid,
+                      transition: "all 0.15s", fontFamily: "'DM Sans', sans-serif" }}>
+                    {l}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
 
           {/* Daten */}
           <div style={{ ...S.sectionLabel, marginTop: 10 }}>{de ? "Daten" : "Data"}</div>
+          {achievements.length > 0 && (
+            <div style={{ marginBottom: 6 }}>
+              <div style={{ ...S.sectionLabel, marginTop: 10 }}>{i18n.achievements}</div>
+              <div style={{ background: T.tabBg, borderRadius: 10, padding: "10px 12px", border: `1px solid ${T.border}` }}>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  {ACHIEVEMENT_DEFS.filter(d => achievements.includes(d.id)).map(d => (
+                    <span key={d.id} title={de ? d.de : d.en}
+                      style={{ fontSize: 18, cursor: "default" }}>
+                      {d.icon}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
           <div style={{ background: T.tabBg, borderRadius: 10, overflow: "hidden", border: `1px solid ${T.border}` }}>
             <button onClick={() => {
               if (!window.confirm(de ? "Alle Statistiken zurücksetzen?" : "Reset all statistics?")) return;
               localStorage.removeItem(STORAGE_KEY);
               localStorage.removeItem(WEEK_KEY);
               localStorage.removeItem(TOTALS_KEY);
-              setTodaySessions(0); setSessions(0); setStreak(0);
+              setTodaySessions(0); setBreakCycleCount(0); setStreak(0);
               setWeekData({}); setTotals({});
             }} style={{ width: "100%", padding: "10px 12px", background: "none", border: "none",
               textAlign: "left", fontSize: 13, color: "#e05050", cursor: "pointer", fontFamily: "inherit" }}>
               {de ? "Statistiken zurücksetzen" : "Reset statistics"}
+            </button>
+            <button onClick={() => {
+              const rows = [["Datum","Sessions"]];
+              Object.entries(weekData).sort().forEach(([d, c]) => rows.push([d, c]));
+              rows.push([]);
+              rows.push(["Gesamt Sessions", totals.sessions ?? 0]);
+              rows.push(["Fokus Minuten", totals.minutes ?? 0]);
+              rows.push(["Längste Serie", totals.longestStreak ?? 0]);
+              const csv = rows.map(r => r.join(",")).join("\n");
+              const blob = new Blob([csv], { type: "text/csv" });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a"); a.href = url;
+              a.download = `focus-partner-${todayStr()}.csv`; a.click();
+              URL.revokeObjectURL(url);
+            }} style={{ width: "100%", padding: "10px 12px", background: "none", border: "none",
+              textAlign: "left", fontSize: 13, color: T.textMid, cursor: "pointer", fontFamily: "inherit",
+              borderTop: `1px solid ${T.border}` }}>
+              {de ? "Statistiken exportieren (CSV)" : "Export statistics (CSV)"}
             </button>
           </div>
 
@@ -1908,6 +2186,67 @@ export default function PomodoroTimer() {
 
       {/* YouTube player — always in DOM so YT.Player() can target it */}
       <div id="yt-player-div" style={{ width: 1, height: 1, opacity: 0, position: "fixed", top: -10, left: -10, pointerEvents: "none" }} />
+
+      {/* Achievement toast */}
+      {newAchievement && (
+        <div style={{
+          position: "fixed", bottom: 80, left: "50%", transform: "translateX(-50%)",
+          background: T.panelBg, border: `1px solid ${T.accent}66`,
+          borderRadius: 14, padding: "10px 18px", zIndex: 70,
+          display: "flex", alignItems: "center", gap: 10,
+          boxShadow: `0 8px 32px rgba(0,0,0,0.4), 0 0 0 1px ${T.accent}22`,
+          animation: "panelFade 0.3s ease-out",
+        }}>
+          <span style={{ fontSize: 22 }}>{newAchievement.icon}</span>
+          <div>
+            <div style={{ fontSize: 10, color: T.accent, letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 600 }}>
+              {de ? "Erfolg freigeschaltet" : "Achievement unlocked"}
+            </div>
+            <div style={{ fontSize: 13, color: T.text, fontWeight: 500 }}>{newAchievement.name}</div>
+          </div>
+        </div>
+      )}
+
+      {/* Day summary overlay */}
+      {showDaySummary && (
+        <div onClick={() => setShowDaySummary(false)}
+          style={{ position: "fixed", inset: 0, zIndex: 60, background: "rgba(0,0,0,0.78)",
+            backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center",
+            animation: "overlayIn 0.2s ease-out" }}>
+          <div onClick={e => e.stopPropagation()} style={{
+            background: T.panelBg, border: `1px solid ${T.border}`,
+            borderRadius: 20, padding: "32px 36px", maxWidth: 300, textAlign: "center",
+            boxShadow: T.shadow }}>
+            <div style={{ fontSize: 40, marginBottom: 10 }}>🎉</div>
+            <div style={{ fontSize: 19, fontWeight: 700, color: T.text, marginBottom: 6,
+              fontFamily: "DM Serif Display, serif" }}>
+              {de ? "Tagesziel erreicht!" : "Daily goal reached!"}
+            </div>
+            <div style={{ fontSize: 13, color: T.textMid, lineHeight: 1.6, marginBottom: 20 }}>
+              {de
+                ? `${todaySessions} Sessions · ${Math.round(todaySessions * settings.focus)} Min. Fokus`
+                : `${todaySessions} sessions · ${Math.round(todaySessions * settings.focus)} min focused`}
+            </div>
+            <div style={{ display: "flex", gap: 18, justifyContent: "center", marginBottom: 22 }}>
+              {[
+                { val: todaySessions, label: de ? "Heute" : "Today" },
+                { val: streak > 0 ? `🔥 ${streak}` : "–", label: de ? "Serie" : "Streak" },
+                { val: `${Math.round(todaySessions * settings.focus)} min`, label: de ? "Fokus" : "Focus" },
+              ].map(({ val, label }) => (
+                <div key={label} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+                  <span style={{ fontSize: 15, fontWeight: 700, color: T.accent }}>{val}</span>
+                  <span style={{ fontSize: 10, color: T.textDim2, letterSpacing: "0.08em", textTransform: "uppercase" }}>{label}</span>
+                </div>
+              ))}
+            </div>
+            <button onClick={() => setShowDaySummary(false)}
+              style={{ background: T.accent, color: T.bg, border: "none", borderRadius: 10,
+                padding: "10px 30px", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+              {de ? "Super 💪" : "Awesome 💪"}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Welcome popup — shown once on first visit */}
       {showWelcome && (
