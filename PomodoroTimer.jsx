@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 
 const R = 108;
 const C = 2 * Math.PI * R;
@@ -6,6 +6,7 @@ const MODES = ["focus", "shortBreak", "longBreak"];
 const STORAGE_KEY = "pomodoro_data";
 const WEEK_KEY = "pomodoro_week";
 const TASKS_KEY = "focus_tasks";
+const TOTALS_KEY = "focus_totals";
 
 const getDuration = (mode, s) =>
   ({ focus: s.focus, shortBreak: s.shortBreak, longBreak: s.longBreak }[mode] * 60);
@@ -55,6 +56,14 @@ function loadWeekData() {
 
 function saveWeekData(data) {
   try { localStorage.setItem(WEEK_KEY, JSON.stringify(data)); } catch {}
+}
+
+function loadTotals() {
+  try { return JSON.parse(localStorage.getItem(TOTALS_KEY) || "{}"); } catch { return {}; }
+}
+
+function saveTotals(data) {
+  try { localStorage.setItem(TOTALS_KEY, JSON.stringify(data)); } catch {}
 }
 
 function DurationInput({ value, onChange, max = 60, style }) {
@@ -107,6 +116,7 @@ export default function PomodoroTimer() {
   const [todaySessions, setTodaySessions] = useState(() => loadDailyData().todaySessions);
   const [streak, setStreak] = useState(() => loadDailyData().streak);
   const [weekData, setWeekData] = useState(() => loadWeekData());
+  const [totals, setTotals] = useState(() => loadTotals());
 
   const [minimalMode, setMinimalMode] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -769,6 +779,16 @@ export default function PomodoroTimer() {
         saveWeekData(updated);
         return updated;
       });
+      setTotals(prev => {
+        const focusMinutes = Math.round(settingsRef.current.focus);
+        const updated = {
+          sessions: (prev.sessions ?? 0) + 1,
+          minutes:  (prev.minutes  ?? 0) + focusMinutes,
+          longestStreak: Math.max(prev.longestStreak ?? 0, newStreak),
+        };
+        saveTotals(updated);
+        return updated;
+      });
       const deLang = settingsRef.current.lang !== "en";
       sendNotif(
         deLang ? "🦦 Focus abgeschlossen!" : "🦦 Focus complete!",
@@ -932,13 +952,17 @@ export default function PomodoroTimer() {
     fullscreen:   de ? "Vollbild"    : "Fullscreen",
     exitFs:       de ? "Vollbild beenden" : "Exit fullscreen",
     percent:      de ? "von Tagesziel" : "of daily goal",
+    totalLabel:   de ? "Gesamt" : "All time",
+    totalSess:    de ? "Sessions" : "Sessions",
+    totalHours:   de ? "Std." : "hrs",
+    totalStreak:  de ? "Längste Serie" : "Best streak",
   };
   const modeLabels = {
     focus:      de ? "Fokus"         : "Focus",
     shortBreak: de ? "Kurze Pause"   : "Short Break",
     longBreak:  de ? "Lange Pause"   : "Long Break",
   };
-  const T = {
+  const T = useMemo(() => ({
     bg:        lm ? "#f5f0ea" : "#0a0a0a",
     card:      lm ? "#ede8e0" : "#0d0d0d",
     border:    lm ? "#ddd8cf" : "#1c1c1c",
@@ -959,7 +983,8 @@ export default function PomodoroTimer() {
     shadow:    lm ? "0 24px 60px rgba(0,0,0,0.12)" : "0 24px 60px rgba(0,0,0,0.75)",
     ringSub:   lm ? "#e0dad0" : "#181818",
     ringGhost: lm ? "rgba(224,123,57,0.12)" : "rgba(224,123,57,0.08)",
-  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [lm, settings.accentColor]);
 
   // Find Monday of current week
   const todayDate = new Date();
@@ -968,17 +993,20 @@ export default function PomodoroTimer() {
   monday.setDate(todayDate.getDate() - ((dow + 6) % 7));
   monday.setHours(0, 0, 0, 0);
 
-  const last7Days = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(monday);
-    d.setDate(monday.getDate() + i);
-    const dateStr = d.toISOString().slice(0, 10);
-    const isFuture = d > todayDate;
-    const isToday = dateStr === todayStr();
+  const last7Days = useMemo(() => {
     const dayLabels = de ? ["Mo","Di","Mi","Do","Fr","Sa","So"] : ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
-    const label = dayLabels[i];
-    const count = isToday ? todaySessions : (weekData[dateStr] ?? 0);
-    return { date: dateStr, label, count, isFuture, isToday };
-  });
+    return Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(monday);
+      d.setDate(monday.getDate() + i);
+      const dateStr = d.toISOString().slice(0, 10);
+      const isFuture = d > todayDate;
+      const isToday = dateStr === todayStr();
+      const label = dayLabels[i];
+      const count = isToday ? todaySessions : (weekData[dateStr] ?? 0);
+      return { date: dateStr, label, count, isFuture, isToday };
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [weekData, todaySessions, de]);
   const weekMax = Math.max(...last7Days.map(d => d.count), 1);
 
   // Shared styles
@@ -1238,6 +1266,22 @@ export default function PomodoroTimer() {
               {todaySessions} / {settings.dailyGoal} {i18n.heute}
             </span>
           </div>
+
+          {/* All-time stats */}
+          {(totals.sessions ?? 0) > 0 && (
+            <div style={{ display: "flex", gap: 18, marginTop: 2 }}>
+              {[
+                { val: totals.sessions ?? 0, label: i18n.totalSess },
+                { val: `${Math.round((totals.minutes ?? 0) / 60 * 10) / 10}`, label: i18n.totalHours },
+                { val: totals.longestStreak ?? 0, label: i18n.totalStreak },
+              ].map(({ val, label }) => (
+                <div key={label} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: T.textMid }}>{val}</span>
+                  <span style={{ fontSize: 9, color: T.textDim2, letterSpacing: "0.08em", textTransform: "uppercase" }}>{label}</span>
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* Week bar chart */}
           <div style={{ display: "flex", alignItems: "flex-end", gap: 6, marginTop: 2 }}>
