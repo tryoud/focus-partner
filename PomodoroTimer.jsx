@@ -1243,7 +1243,8 @@ export default function PomodoroTimer() {
     <div className="relative flex items-center justify-center"
       style={{ background: T.bg, width: "100%", height: "100dvh", minHeight: "-webkit-fill-available",
         fontFamily: "'DM Sans', sans-serif", color: T.text, transition: "background 0.3s, color 0.3s",
-        userSelect: "none", overflow: "hidden", touchAction: "pan-y" }}>
+        userSelect: "none", overflow: "hidden", touchAction: "pan-y",
+        paddingTop: "env(safe-area-inset-top)" }}>
 
       {/* Glow */}
       <div style={{ position: "absolute", width: 600, height: 600, borderRadius: "50%",
