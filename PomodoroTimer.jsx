@@ -1522,7 +1522,7 @@ export default function PomodoroTimer() {
                               ytPlayerRef.current = null;
                             }
                           }}
-                          style={{ padding: "6px 4px", borderRadius: 7, fontSize: 10,
+                          style={{ padding: "5px 2px", borderRadius: 7, fontSize: 10,
                             background: ytVideoId === v.id && settings.ambient === "youtube" ? T.tabActive : "transparent",
                             border: `1px solid ${ytVideoId === v.id && settings.ambient === "youtube" ? T.accent : T.border}`,
                             color: ytVideoId === v.id && settings.ambient === "youtube" ? T.accent : T.textDim,
