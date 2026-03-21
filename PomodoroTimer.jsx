@@ -1205,7 +1205,7 @@ export default function PomodoroTimer() {
   // Shared styles
   const S = {
     panel: {
-      position: "fixed", borderRadius: 16,
+      position: "fixed", borderRadius: 16, zIndex: 30,
       background: T.panelBg, border: `1px solid ${T.border}`,
       padding: "20px 22px 18px",
       animation: "panelFade 0.18s ease-out",
@@ -1564,6 +1564,15 @@ export default function PomodoroTimer() {
           </svg>
         </button>
       </div>
+
+      {/* Mobile backdrop — dims content when task or settings panel is open */}
+      {isMobile && (showTasks || showSettings) && (
+        <div onClick={() => { setShowTasks(false); setShowSettings(false); }}
+          style={{ position: "fixed", inset: 0, zIndex: 29,
+            background: lm ? "rgba(245,240,234,0.7)" : "rgba(10,10,10,0.7)",
+            backdropFilter: "blur(4px)", WebkitBackdropFilter: "blur(4px)",
+            animation: "overlayIn 0.15s ease-out" }} />
+      )}
 
       {/* Task panel */}
       {showTasks && (
