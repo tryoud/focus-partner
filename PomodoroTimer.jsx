@@ -5,6 +5,7 @@ const C = 2 * Math.PI * R;
 const MODES = ["focus", "shortBreak", "longBreak"];
 const STORAGE_KEY = "pomodoro_data";
 const WEEK_KEY = "pomodoro_week";
+const TASKS_KEY = "focus_tasks";
 
 const getDuration = (mode, s) =>
   ({ focus: s.focus, shortBreak: s.shortBreak, longBreak: s.longBreak }[mode] * 60);
@@ -99,7 +100,9 @@ export default function PomodoroTimer() {
   const [digitPop, setDigitPop] = useState(false);
   const [ringTransition, setRingTransition] = useState(true);
   const [ringFadeIn, setRingFadeIn] = useState(false);
-  const [tasks, setTasks] = useState([]);
+  const [tasks, setTasks] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(TASKS_KEY) || "[]"); } catch { return []; }
+  });
   const [taskInput, setTaskInput] = useState("");
   const [todaySessions, setTodaySessions] = useState(() => loadDailyData().todaySessions);
   const [streak, setStreak] = useState(() => loadDailyData().streak);
@@ -185,6 +188,22 @@ export default function PomodoroTimer() {
   // Tab title
   useEffect(() => {
     document.title = "Focus Partner";
+  }, []);
+
+  // Persist tasks
+  useEffect(() => {
+    try { localStorage.setItem(TASKS_KEY, JSON.stringify(tasks)); } catch {}
+  }, [tasks]);
+
+  // Pause/resume AudioContext when tab is hidden/visible (save CPU)
+  useEffect(() => {
+    const handler = () => {
+      if (!audioCtxRef.current) return;
+      if (document.hidden) audioCtxRef.current.suspend().catch(() => {});
+      else audioCtxRef.current.resume().catch(() => {});
+    };
+    document.addEventListener("visibilitychange", handler);
+    return () => document.removeEventListener("visibilitychange", handler);
   }, []);
 
   // Audio
@@ -658,6 +677,13 @@ export default function PomodoroTimer() {
           Notification.requestPermission();
         }
         setIsRunning(r => !r);
+      } else if (e.key === "n" || e.key === "N") {
+        // Mark the first uncompleted task as done
+        setTasks(ts => {
+          const idx = ts.findIndex(t => !t.done);
+          if (idx === -1) return ts;
+          return ts.map((t, i) => i === idx ? { ...t, done: true } : t);
+        });
       } else if (e.key === "r" || e.key === "R") {
         clearInterval(intervalRef.current);
         completedRef.current = false;
@@ -743,10 +769,20 @@ export default function PomodoroTimer() {
         saveWeekData(updated);
         return updated;
       });
-      sendNotif("🦦 Focus abgeschlossen!", `Weiter zu: ${nextMode === "longBreak" ? "Long Break" : "Short Break"}`);
+      const deLang = settingsRef.current.lang !== "en";
+      sendNotif(
+        deLang ? "🦦 Focus abgeschlossen!" : "🦦 Focus complete!",
+        deLang
+          ? `Weiter zu: ${nextMode === "longBreak" ? "Lange Pause" : "Kurze Pause"}`
+          : `Next: ${nextMode === "longBreak" ? "Long Break" : "Short Break"}`
+      );
     } else {
       nextMode = "focus";
-      sendNotif("☕ Pause vorbei!", "Zeit für eine neue Focus-Session.");
+      const deLang = settingsRef.current.lang !== "en";
+      sendNotif(
+        deLang ? "☕ Pause vorbei!" : "☕ Break's over!",
+        deLang ? "Zeit für eine neue Focus-Session." : "Time for a new focus session."
+      );
     }
 
     setTimeout(() => {
@@ -1057,7 +1093,14 @@ export default function PomodoroTimer() {
           <div onClick={e => e.stopPropagation()}
             style={{ background: T.panelBg, border: `1px solid ${T.border}`, borderRadius: 16, padding: "28px 36px", minWidth: 260 }}>
             <p style={{ ...S.sectionLabel, marginBottom: 20 }}>{i18n.shortcuts}</p>
-            {[["Space","Start / Pause"],["R","Reset"],["1 / 2 / 3","Mode wechseln"],["?","Shortcuts"],["Esc","Panel schließen"]].map(([k, a]) => (
+            {[
+              ["Space", de ? "Start / Pause" : "Start / Pause"],
+              ["R",     de ? "Reset"          : "Reset"],
+              ["N",     de ? "Task abhaken"   : "Check off task"],
+              ["1 / 2 / 3", de ? "Mode wechseln" : "Switch mode"],
+              ["?",    de ? "Shortcuts"       : "Shortcuts"],
+              ["Esc",  de ? "Panel schließen" : "Close panel"],
+            ].map(([k, a]) => (
               <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 40, marginBottom: 10 }}>
                 <code style={{ fontSize: 12, background: T.inputBg, border: `1px solid ${T.inputBdr}`,
                   borderRadius: 6, padding: "2px 8px", color: T.accent }}>{k}</code>
@@ -1567,16 +1610,18 @@ export default function PomodoroTimer() {
                 )}
 
                 {/* EQ */}
-                {settings.ambient !== "off" && settings.ambient === "youtube" && (
-                  <p style={{ fontSize: 10, color: T.textDim, margin: "0 0 8px", textAlign: "center" }}>{i18n.noInternet}</p>
-                )}
-                {settings.ambient !== "off" && settings.ambient !== "youtube" && (() => {
+                {settings.ambient !== "off" && (() => {
+                  const ytActive = settings.ambient === "youtube";
                   const ALL_BANDS = [["sub","Sub","60Hz"],["bass","Bass","200Hz"],["lowMid","Lo Mid","500Hz"],["mid","Mid","1kHz"],["upperMid","Hi Mid","3kHz"],["presence","Pres","6kHz"],["air","Air","10kHz"]];
                   const BASIC_BANDS = [["bass","Bass","200Hz"],["mid","Mid","1kHz"],["air","Treble","10kHz"]];
                   const bands = settings.eqMode === "advanced" ? ALL_BANDS : BASIC_BANDS;
                   const resetEq = { sub: 0, bass: 0, lowMid: 0, mid: 0, upperMid: 0, presence: 0, air: 0 };
                   return (
-                    <div style={{ background: T.tabBg, borderRadius: 10, padding: "10px 12px 12px", marginBottom: 6 }}>
+                    <div style={{ background: T.tabBg, borderRadius: 10, padding: "10px 12px 12px", marginBottom: 6,
+                      opacity: ytActive ? 0.35 : 1, pointerEvents: ytActive ? "none" : "auto", transition: "opacity 0.2s" }}>
+                      {ytActive && (
+                        <p style={{ fontSize: 9, color: T.textDim, margin: "0 0 8px", textAlign: "center" }}>{i18n.noInternet}</p>
+                      )}
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                           <span style={{ fontSize: 11, fontWeight: 600, color: T.textDim, letterSpacing: "0.1em", textTransform: "uppercase" }}>{i18n.equalizer}</span>
