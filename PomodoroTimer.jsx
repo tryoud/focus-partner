@@ -175,8 +175,8 @@ export default function PomodoroTimer() {
     } catch (_) {}
   }, [getCtx]);
 
-  // Ambient — shared fade-out helper
-  const stopAmbientRef = useCallback((ref) => {
+  // Ambient — shared fade-out helper. immediate=true cuts instantly (no fade).
+  const stopAmbientRef = useCallback((ref, immediate = false) => {
     const a = ref.current;
     if (!a) return;
     ref.current = null;
@@ -187,14 +187,17 @@ export default function PomodoroTimer() {
         const now = ctx.currentTime;
         a.gain.gain.cancelScheduledValues(now);
         a.gain.gain.setValueAtTime(a.gain.gain.value, now);
-        a.gain.gain.linearRampToValueAtTime(0, now + 0.4);
-        setTimeout(() => { (a.nodes || []).forEach(n => { try { n.stop(); } catch (_) {} }); }, 450);
+        const fadeTime = immediate ? 0.02 : 0.4;
+        a.gain.gain.linearRampToValueAtTime(0, now + fadeTime);
+        setTimeout(() => { (a.nodes || []).forEach(n => { try { n.stop(); } catch (_) {} }); }, immediate ? 30 : 450);
       } catch (_) {}
     }
   }, [getCtx]);
 
-  const stopAmbient    = useCallback(() => stopAmbientRef(ambientRef),  [stopAmbientRef]);
-  const stopAmbientMix = useCallback(() => stopAmbientRef(ambientRef2), [stopAmbientRef]);
+  const stopAmbient          = useCallback(() => stopAmbientRef(ambientRef,  false), [stopAmbientRef]);
+  const stopAmbientImmediate = useCallback(() => stopAmbientRef(ambientRef,  true),  [stopAmbientRef]);
+  const stopAmbientMix          = useCallback(() => stopAmbientRef(ambientRef2, false), [stopAmbientRef]);
+  const stopAmbientMixImmediate = useCallback(() => stopAmbientRef(ambientRef2, true),  [stopAmbientRef]);
 
   // Lazy-create the 7-band EQ chain (persists across ambient changes)
   const getOrCreateEQ = useCallback((ctx) => {
@@ -289,7 +292,7 @@ export default function PomodoroTimer() {
   }, [isRunning]);
 
   const previewAmbient = useCallback((val) => {
-    if (val === "off") { isPreviewingRef.current = false; stopAmbient(); return; }
+    if (val === "off") { isPreviewingRef.current = false; stopAmbientImmediate(); return; }
     if (isRunning) return;
     if (previewTimeoutRef.current) clearTimeout(previewTimeoutRef.current);
     isPreviewingRef.current = true;
@@ -299,12 +302,12 @@ export default function PomodoroTimer() {
       stopAmbient();
       previewTimeoutRef.current = null;
     }, 5000);
-  }, [isRunning, startAmbient, stopAmbient]);
+  }, [isRunning, startAmbient, stopAmbient, stopAmbientImmediate]);
 
   const previewAmbientMix = useCallback((val) => {
     if (isRunning) return;
     if (previewMixTimeoutRef.current) clearTimeout(previewMixTimeoutRef.current);
-    if (val === "off") { isPreviewingMixRef.current = false; stopAmbientMix(); return; }
+    if (val === "off") { isPreviewingMixRef.current = false; stopAmbientMixImmediate(); return; }
     isPreviewingMixRef.current = true;
     startAmbient(val, true);
     previewMixTimeoutRef.current = setTimeout(() => {
@@ -312,7 +315,7 @@ export default function PomodoroTimer() {
       stopAmbientMix();
       previewMixTimeoutRef.current = null;
     }, 5000);
-  }, [isRunning, startAmbient, stopAmbientMix]);
+  }, [isRunning, startAmbient, stopAmbientMix, stopAmbientMixImmediate]);
 
   useEffect(() => {
     if (isRunning && settings.ambient !== "off") {
@@ -1416,7 +1419,7 @@ export default function PomodoroTimer() {
                             <button onClick={() => {
                               isPreviewingMixRef.current = false;
                               if (previewMixTimeoutRef.current) { clearTimeout(previewMixTimeoutRef.current); previewMixTimeoutRef.current = null; }
-                              stopAmbientMix();
+                              stopAmbientMixImmediate();
                               setSettings(s => ({ ...s, ambientMix: "off" }));
                             }}
                               style={{ fontSize: 11, color: T.textDim, background: "none", border: "none", cursor: "pointer", padding: 0, lineHeight: 1 }}>✕</button>
