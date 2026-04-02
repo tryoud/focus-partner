@@ -9,6 +9,8 @@ import {
 import { SOUND_CREATORS } from "./audio/sounds.js";
 import DurationInput from "./components/DurationInput.jsx";
 import Toggle from "./components/Toggle.jsx";
+import CrystalRush from "./components/CrystalRush.jsx";
+import PauseInvitation from "./components/PauseInvitation.jsx";
 
 export default function PomodoroTimer() {
   const [mode, setMode] = useState("focus");
@@ -38,8 +40,17 @@ export default function PomodoroTimer() {
   const [breathPhase, setBreathPhase] = useState("inhale");
   const [ytVideoId, setYtVideoId] = useState(null);
   const [ytActivated, setYtActivated] = useState(false);
+  const [showPauseInvitation, setShowPauseInvitation] = useState(false);
+  const [showCrystalRush, setShowCrystalRush] = useState(false);
+  const [crystalHighscore, setCrystalHighscore] = useState(
+    () => { try { return parseInt(localStorage.getItem("focuspartner_crystal_rush_highscore") || "0"); } catch { return 0; } }
+  );
+  const [totalCrystals, setTotalCrystals] = useState(
+    () => { try { return parseInt(localStorage.getItem("focuspartner_total_crystals") || "0"); } catch { return 0; } }
+  );
 
   const ytActivatedRef = useRef(false);
+  const pauseInvitationTimerRef = useRef(null);
   const intervalRef = useRef(null);
   const audioCtxRef = useRef(null);
   const ambientRef = useRef(null);
@@ -564,6 +575,16 @@ export default function PomodoroTimer() {
       setTimeLeft(getDuration(nextMode, s));
       triggerDigitPop();
       if (s.autoStart) setIsRunning(true);
+      // Crystal Rush invitation on break start
+      if (nextMode === "shortBreak" || nextMode === "longBreak") {
+        if (pauseInvitationTimerRef.current) clearTimeout(pauseInvitationTimerRef.current);
+        pauseInvitationTimerRef.current = setTimeout(() => setShowPauseInvitation(true), 3000);
+      } else {
+        // Returning to focus — clean up game state
+        setShowPauseInvitation(false);
+        setShowCrystalRush(false);
+        if (pauseInvitationTimerRef.current) clearTimeout(pauseInvitationTimerRef.current);
+      }
     }, 950);
   }, [playChime, resetRing, triggerDigitPop]);
 
@@ -599,6 +620,20 @@ export default function PomodoroTimer() {
     clearInterval(intervalRef.current);
     setIsRunning(false); completedRef.current = false;
     resetRing(); setTimeLeft(getDuration(mode, settings));
+  };
+
+  const handleGameComplete = (score, crystalsEarned) => {
+    setShowCrystalRush(false);
+    if (score > crystalHighscore) {
+      setCrystalHighscore(score);
+      try { localStorage.setItem("focuspartner_crystal_rush_highscore", String(score)); } catch {}
+    }
+    const newTotal = totalCrystals + crystalsEarned;
+    setTotalCrystals(newTotal);
+    try { localStorage.setItem("focuspartner_total_crystals", String(newTotal)); } catch {}
+    if (timeLeft > 90) {
+      setTimeout(() => setShowPauseInvitation(true), 2000);
+    }
   };
 
   const handleToggle = () => {
@@ -1069,6 +1104,21 @@ export default function PomodoroTimer() {
               {breathPhase === "inhale" ? i18n.breathIn : i18n.breathOut}
             </span>
           </div>
+        )}
+
+        {/* Crystal Rush invitation banner */}
+        {(mode === "shortBreak" || mode === "longBreak") && showPauseInvitation && !showCrystalRush && (
+          <PauseInvitation
+            pauseTimeLeft={timeLeft}
+            onStartGame={() => { setShowPauseInvitation(false); setShowCrystalRush(true); }}
+            onSkip={() => setShowPauseInvitation(false)}
+            highscore={crystalHighscore}
+          />
+        )}
+
+        {/* Crystal total during breaks */}
+        {(mode === "shortBreak" || mode === "longBreak") && totalCrystals > 0 && !showPauseInvitation && !showCrystalRush && (
+          <div style={{ fontSize: 11, color: T.textDim2 }}>◆ {totalCrystals} Kristalle gesammelt</div>
         )}
 
         {/* Session progress + stats */}
@@ -1698,6 +1748,17 @@ export default function PomodoroTimer() {
 
       {/* YouTube player — always in DOM so YT.Player() can target it */}
       <div id="yt-player-div" style={{ width: 1, height: 1, opacity: 0, position: "fixed", top: -10, left: -10, pointerEvents: "none" }} />
+
+      {/* Crystal Rush full-screen overlay */}
+      {showCrystalRush && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 50, background: "rgba(0,0,0,0.92)",
+          display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <CrystalRush
+            onComplete={handleGameComplete}
+            onSkip={() => setShowCrystalRush(false)}
+          />
+        </div>
+      )}
 
       {/* Achievement toast */}
       {newAchievement && (
