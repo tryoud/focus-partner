@@ -1,155 +1,14 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-
-const R = 108;
-const C = 2 * Math.PI * R;
-const MODES = ["focus", "shortBreak", "longBreak"];
-const STORAGE_KEY = "pomodoro_data";
-const WEEK_KEY = "pomodoro_week";
-const TASKS_KEY = "focus_tasks";
-const TOTALS_KEY = "focus_totals";
-const PRESETS_KEY = "focus_presets";
-const SETTINGS_KEY = "focus_settings";
-const ACHIEVEMENTS_KEY = "focus_achievements";
-
-const DEFAULT_SETTINGS = {
-  focus: 25, shortBreak: 5, longBreak: 15,
-  autoStart: false, sound: true, tick: false, longBreakInterval: 4,
-  ambient: "off", ambientMix: "off", ambientCategory: "neural", dailyGoal: 8,
-  eq: { sub: 0, bass: 0, lowMid: 0, mid: 0, upperMid: 0, presence: 0, air: 0 },
-  eqMode: "basic",
-  ambientVolume: 0.75,
-  lightMode: false,
-  lang: "de",
-  accentColor: "#e07b39",
-  autoDark: true,       // follow system prefers-color-scheme
-
-  ambientMixRatio: 0.5, // ratio for mix secondary sound (0=silent, 1=same as main)
-
-  uiScale: "M",         // "S" | "M" | "L" — overall UI zoom
-};
-
-function loadSettings() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}");
-    // Deep merge: saved values override defaults (handles new keys added in updates)
-    // Reset ambient to "off" on load — browser blocks AudioContext autoplay without user gesture
-    return {
-      ...DEFAULT_SETTINGS,
-      ...saved,
-      eq: { ...DEFAULT_SETTINGS.eq, ...(saved.eq || {}) },
-      ambient: "off",
-      ambientMix: "off",
-    };
-  } catch { return { ...DEFAULT_SETTINGS }; }
-}
-
-const getDuration = (mode, s) =>
-  ({ focus: s.focus, shortBreak: s.shortBreak, longBreak: s.longBreak }[mode] * 60);
-
-const localDateStr = (d = new Date()) => {
-  const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, "0"), day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-};
-const todayStr = () => localDateStr();
-const yesterdayStr = () => localDateStr(new Date(Date.now() - 86400000));
-
-const makeNoiseBuffer = (ctx, secs) => {
-  const size = ctx.sampleRate * secs;
-  const buf = ctx.createBuffer(1, size, ctx.sampleRate);
-  const data = buf.getChannelData(0);
-  for (let i = 0; i < size; i++) data[i] = Math.random() * 2 - 1;
-  return buf;
-};
-
-const makeBrownNoiseBuffer = (ctx, secs) => {
-  const size = ctx.sampleRate * secs;
-  const buf = ctx.createBuffer(1, size, ctx.sampleRate);
-  const data = buf.getChannelData(0);
-  let last = 0;
-  for (let i = 0; i < size; i++) {
-    last = (last + 0.02 * (Math.random() * 2 - 1)) / 1.02;
-    data[i] = last * 3.5; // normalize to audible range
-  }
-  return buf;
-};
-
-function loadDailyData() {
-  try {
-    const d = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
-    const t = todayStr(), y = yesterdayStr();
-    if (d.date === t) return { todaySessions: d.todaySessions ?? 0, streak: d.streak ?? 0 };
-    if (d.date === y) return { todaySessions: 0, streak: d.streak ?? 0 };
-    return { todaySessions: 0, streak: 0 };
-  } catch { return { todaySessions: 0, streak: 0 }; }
-}
-
-function saveDailyData(todaySessions, streak) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ date: todayStr(), todaySessions, streak }));
-  } catch {}
-}
-
-function loadWeekData() {
-  try { return JSON.parse(localStorage.getItem(WEEK_KEY) || "{}"); } catch { return {}; }
-}
-
-function saveWeekData(data) {
-  try { localStorage.setItem(WEEK_KEY, JSON.stringify(data)); } catch {}
-}
-
-function loadTotals() {
-  try { return JSON.parse(localStorage.getItem(TOTALS_KEY) || "{}"); } catch { return {}; }
-}
-
-function saveTotals(data) {
-  try { localStorage.setItem(TOTALS_KEY, JSON.stringify(data)); } catch {}
-}
-
-function loadPresets() {
-  try { return JSON.parse(localStorage.getItem(PRESETS_KEY) || "[null,null,null]"); } catch { return [null, null, null]; }
-}
-
-function savePresetsData(data) {
-  try { localStorage.setItem(PRESETS_KEY, JSON.stringify(data)); } catch {}
-}
-
-function loadAchievements() {
-  try { return JSON.parse(localStorage.getItem(ACHIEVEMENTS_KEY) || "[]"); } catch { return []; }
-}
-function saveAchievements(arr) {
-  try { localStorage.setItem(ACHIEVEMENTS_KEY, JSON.stringify(arr)); } catch {}
-}
-
-function DurationInput({ value, onChange, max = 60, style }) {
-  const [local, setLocal] = useState(String(value));
-  useEffect(() => { setLocal(String(value)); }, [value]);
-  const commit = () => {
-    const v = Math.max(1, Math.min(max, parseInt(local) || 1));
-    setLocal(String(v));
-    onChange(v);
-  };
-  return (
-    <input
-      type="number" min={1} max={max} value={local}
-      onChange={e => setLocal(e.target.value)}
-      onBlur={commit}
-      onKeyDown={e => e.key === "Enter" && commit()}
-      className="pomodoro-input"
-      style={style}
-    />
-  );
-}
-
-const ACHIEVEMENT_DEFS = [
-  { id: "first",    icon: "🎯", de: "Erste Session",        en: "First session",       check: (t) => (t.sessions ?? 0) >= 1   },
-  { id: "ten",      icon: "🏅", de: "10 Sessions",           en: "10 sessions",         check: (t) => (t.sessions ?? 0) >= 10  },
-  { id: "fifty",    icon: "⭐", de: "50 Sessions",           en: "50 sessions",         check: (t) => (t.sessions ?? 0) >= 50  },
-  { id: "hundred",  icon: "💯", de: "100 Sessions",          en: "100 sessions",        check: (t) => (t.sessions ?? 0) >= 100 },
-  { id: "streak3",  icon: "🔥", de: "3-Tage-Serie",          en: "3-day streak",        check: (t, s) => s >= 3 },
-  { id: "streak7",  icon: "⚡", de: "Wochenkrieger",         en: "Week warrior",        check: (t, s) => s >= 7 },
-  { id: "streak30", icon: "🌟", de: "Monats-Meister",        en: "Monthly master",      check: (t, s) => s >= 30 },
-  { id: "hours10",  icon: "⏱",  de: "10 Stunden Fokus",     en: "10 hours focused",    check: (t) => (t.minutes ?? 0) >= 600  },
-];
+import { R, C, MODES, TASKS_KEY, ACHIEVEMENT_DEFS } from "./constants.js";
+import {
+  loadSettings, saveSettings, loadDailyData, saveDailyData,
+  loadWeekData, saveWeekData, loadTotals, saveTotals,
+  loadTasks, saveTasks, loadAchievements, saveAchievements,
+  getDuration, localDateStr, todayStr, yesterdayStr,
+} from "./storage.js";
+import { SOUND_CREATORS } from "./audio/sounds.js";
+import DurationInput from "./components/DurationInput.jsx";
+import Toggle from "./components/Toggle.jsx";
 
 export default function PomodoroTimer() {
   const [mode, setMode] = useState("focus");
@@ -164,26 +23,22 @@ export default function PomodoroTimer() {
   const [digitPop, setDigitPop] = useState(false);
   const [ringTransition, setRingTransition] = useState(true);
   const [ringFadeIn, setRingFadeIn] = useState(false);
-  const [tasks, setTasks] = useState(() => {
-    try { return JSON.parse(localStorage.getItem(TASKS_KEY) || "[]"); } catch { return []; }
-  });
+  const [tasks, setTasks] = useState(() => loadTasks());
   const [taskInput, setTaskInput] = useState("");
   const [todaySessions, setTodaySessions] = useState(() => loadDailyData().todaySessions);
   const [streak, setStreak] = useState(() => loadDailyData().streak);
   const [weekData, setWeekData] = useState(() => loadWeekData());
   const [totals, setTotals] = useState(() => loadTotals());
-  const [presets, setPresets] = useState(() => loadPresets());
-
   const [minimalMode, setMinimalMode] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showWelcome, setShowWelcome] = useState(() => !localStorage.getItem("focus_welcomed"));
   const [achievements, setAchievements] = useState(() => loadAchievements());
-  const [newAchievement, setNewAchievement] = useState(null); // { icon, name } for toast
+  const [newAchievement, setNewAchievement] = useState(null);
   const [showDaySummary, setShowDaySummary] = useState(false);
-  const [breathPhase, setBreathPhase] = useState("inhale"); // "inhale" | "hold" | "exhale"
-
+  const [breathPhase, setBreathPhase] = useState("inhale");
   const [ytVideoId, setYtVideoId] = useState(null);
   const [ytActivated, setYtActivated] = useState(false);
+
   const ytActivatedRef = useRef(false);
   const intervalRef = useRef(null);
   const audioCtxRef = useRef(null);
@@ -212,7 +67,7 @@ export default function PomodoroTimer() {
   useEffect(() => { todaySessionsRef.current = todaySessions; }, [todaySessions]);
   useEffect(() => { streakRef.current = streak; }, [streak]);
 
-  // Styles + keyframes (static — once)
+  // Static styles + keyframes (injected once)
   useEffect(() => {
     const id = "pomodoro-styles-static";
     if (document.getElementById(id)) return;
@@ -244,7 +99,6 @@ export default function PomodoroTimer() {
     if (!el) { el = document.createElement("style"); el.id = id; document.head.appendChild(el); }
     const rowHover  = settings.lightMode ? "#e4dfd6" : "#131313";
     const optHover  = settings.lightMode ? "#c8c2b8" : "#2e2e2e";
-    const iconHover = settings.lightMode ? "#333" : "#555";
     const acc = settings.accentColor ?? "#e07b39";
     const bg  = settings.lightMode ? "#f5f0ea" : "#0a0a0a";
     el.textContent = `
@@ -252,38 +106,26 @@ export default function PomodoroTimer() {
       html, body { background: ${bg} !important; }
       .task-row:hover { background:${rowHover} !important }
       .ambient-opt:hover { border-color:${optHover} !important }
-      .icon-btn:hover { color:${iconHover} !important }
       .pomodoro-input:focus { outline:none; border-color:${acc} !important }
     `;
   }, [settings.lightMode, settings.accentColor]);
 
-  // Tab title
-  useEffect(() => {
-    document.title = "Focus Partner";
-  }, []);
+  useEffect(() => { document.title = "Focus Partner"; }, []);
 
   // Auto-dark: follow system prefers-color-scheme when autoDark is enabled
   useEffect(() => {
     if (!settings.autoDark) return;
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     const apply = (e) => setSettings(s => ({ ...s, lightMode: !e.matches }));
-    apply(mq); // apply immediately
+    apply(mq);
     mq.addEventListener("change", apply);
     return () => mq.removeEventListener("change", apply);
   }, [settings.autoDark]);
 
-  // Persist settings
-  useEffect(() => {
-    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch {}
-  }, [settings]);
-
-  // Persist tasks
-  useEffect(() => {
-    try { localStorage.setItem(TASKS_KEY, JSON.stringify(tasks)); } catch {}
-  }, [tasks]);
+  useEffect(() => { saveSettings(settings); }, [settings]);
+  useEffect(() => { saveTasks(tasks); }, [tasks]);
 
   // Resume AudioContext if browser auto-suspended it (e.g. iOS background policy)
-  // We do NOT suspend intentionally — ambient sound should keep playing in background
   useEffect(() => {
     const handler = () => {
       if (!document.hidden && audioCtxRef.current?.state === "suspended") {
@@ -294,7 +136,8 @@ export default function PomodoroTimer() {
     return () => document.removeEventListener("visibilitychange", handler);
   }, []);
 
-  // Audio
+  // ── Audio ─────────────────────────────────────────────────────────────────
+
   const getCtx = useCallback(() => {
     if (!audioCtxRef.current)
       audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
@@ -353,7 +196,7 @@ export default function PomodoroTimer() {
   const stopAmbient    = useCallback(() => stopAmbientRef(ambientRef),  [stopAmbientRef]);
   const stopAmbientMix = useCallback(() => stopAmbientRef(ambientRef2), [stopAmbientRef]);
 
-  // Lazy-create the 3-band EQ chain (persists across ambient changes)
+  // Lazy-create the 7-band EQ chain (persists across ambient changes)
   const getOrCreateEQ = useCallback((ctx) => {
     if (eqRef.current) return eqRef.current;
     const eq0 = settingsRef.current.eq;
@@ -392,235 +235,18 @@ export default function PomodoroTimer() {
       master.gain.setValueAtTime(0, ctx.currentTime);
       const scaleGain = ctx.createGain();
       scaleGain.gain.value = isSecondary ? (settingsRef.current.ambientMixRatio ?? 0.5) : 1;
-      master.connect(scaleGain); scaleGain.connect(eq.sub ?? eq.bass); // master → scale → EQ chain → destination
+      master.connect(scaleGain);
+      scaleGain.connect(eq.sub ?? eq.bass);
 
-      // ── helper: subtle "air" layer so EQ has full-spectrum content ──
-      const addAir = (vol = 0.012) => {
-        const src = ctx.createBufferSource();
-        src.buffer = makeNoiseBuffer(ctx, 4); src.loop = true;
-        const hpf = ctx.createBiquadFilter(); hpf.type = "highpass"; hpf.frequency.value = 800;
-        const g = ctx.createGain(); g.gain.value = vol;
-        src.connect(hpf); hpf.connect(g); g.connect(master);
-        src.start(); nodes.push(src);
-      };
-
-      // ── helper: isochronic AM (brain.fm approach — works without headphones) ──
-      // Carrier tone amplitude-modulated at beatHz. DC offset 0.5 + LFO ±0.5 = gain 0..1
-      const mkIsochronic = (beatHz, carrierFreqs) => {
-        const amGain = ctx.createGain(); amGain.gain.value = 0;
-        const dc = ctx.createConstantSource(); dc.offset.value = 0.5;
-        dc.connect(amGain.gain); dc.start(); nodes.push(dc);
-        const lfo = ctx.createOscillator(); lfo.type = "sine"; lfo.frequency.value = beatHz;
-        const lfoD = ctx.createGain(); lfoD.gain.value = 0.5;
-        lfo.connect(lfoD); lfoD.connect(amGain.gain); lfo.start(); nodes.push(lfo);
-        carrierFreqs.forEach(([freq, vol]) => {
-          const osc = ctx.createOscillator(); osc.type = "sine"; osc.frequency.value = freq;
-          const g = ctx.createGain(); g.gain.value = vol;
-          osc.connect(g); g.connect(amGain); osc.start(); nodes.push(osc);
-        });
-        amGain.connect(master);
-      };
-
-      // ── helper: binaural pair ──
-      const mkBinaural = (baseFreq, beatHz) => {
-        const mk = (freq, pan) => {
-          const osc = ctx.createOscillator();
-          osc.type = "sine"; osc.frequency.value = freq;
-          const panner = ctx.createStereoPanner(); panner.pan.value = pan;
-          const g = ctx.createGain(); g.gain.value = 0.42;
-          osc.connect(panner); panner.connect(g); g.connect(master);
-          osc.start(); nodes.push(osc);
-        };
-        mk(baseFreq, -1); mk(baseFreq + beatHz, 1);
-      };
-
-      if (type === "rain") {
-        const src = ctx.createBufferSource();
-        src.buffer = makeNoiseBuffer(ctx, 4); src.loop = true;
-        const lpf = ctx.createBiquadFilter();
-        lpf.type = "lowpass"; lpf.frequency.value = 450; lpf.Q.value = 0.8;
-        src.connect(lpf); lpf.connect(master);
-        src.start(); nodes.push(src);
-        master.gain.linearRampToValueAtTime(0.22, ctx.currentTime + 0.5);
-
-      } else if (type === "noise") {
-        const src = ctx.createBufferSource();
-        src.buffer = makeNoiseBuffer(ctx, 4); src.loop = true;
-        const hpf = ctx.createBiquadFilter();
-        hpf.type = "highpass"; hpf.frequency.value = 250;
-        src.connect(hpf); hpf.connect(master);
-        src.start(); nodes.push(src);
-        master.gain.linearRampToValueAtTime(0.11, ctx.currentTime + 0.5);
-
-      } else if (type === "brown") {
-        // Brown noise: deeper, warmer — great for blocking distractions
-        const src = ctx.createBufferSource();
-        src.buffer = makeBrownNoiseBuffer(ctx, 6); src.loop = true;
-        const lpf = ctx.createBiquadFilter();
-        lpf.type = "lowpass"; lpf.frequency.value = 700; lpf.Q.value = 0.5;
-        src.connect(lpf); lpf.connect(master);
-        src.start(); nodes.push(src);
-        master.gain.linearRampToValueAtTime(0.28, ctx.currentTime + 0.5);
-
-      } else if (type === "ocean") {
-        // Ocean: noise + slow amplitude modulation (wave rhythm ~0.08 Hz)
-        const src = ctx.createBufferSource();
-        src.buffer = makeNoiseBuffer(ctx, 8); src.loop = true;
-        const lpf = ctx.createBiquadFilter();
-        lpf.type = "lowpass"; lpf.frequency.value = 320; lpf.Q.value = 0.6;
-        const waveGain = ctx.createGain(); waveGain.gain.value = 0.5;
-        src.connect(lpf); lpf.connect(waveGain); waveGain.connect(master);
-        src.start(); nodes.push(src);
-        // LFO for wave swell
-        const lfo = ctx.createOscillator(); lfo.type = "sine"; lfo.frequency.value = 0.08;
-        const lfoDepth = ctx.createGain(); lfoDepth.gain.value = 0.22;
-        lfo.connect(lfoDepth); lfoDepth.connect(waveGain.gain);
-        lfo.start(); nodes.push(lfo);
-        master.gain.linearRampToValueAtTime(0.32, ctx.currentTime + 1.5);
-
-      } else if (type === "neural") {
-        // Alpha hybrid: binaural (headphones) + isochronic AM (without headphones)
-        // Both at 10 Hz alpha — relaxed focus & learning
-        mkBinaural(200, 10); addAir(0.010);
-        mkIsochronic(10, [[220, 0.025], [330, 0.018], [440, 0.012]]); // isochronic layer
-        [[220, 0.045], [330, 0.032], [440, 0.022], [550, 0.014], [660, 0.009]].forEach(([freq, vol], i) => {
-          const osc = ctx.createOscillator(); osc.type = "sine"; osc.frequency.value = freq;
-          const lfo = ctx.createOscillator(); lfo.type = "sine"; lfo.frequency.value = 0.07 + i * 0.013;
-          const lfoDepth = ctx.createGain(); lfoDepth.gain.value = vol * 0.4;
-          const oscGain = ctx.createGain(); oscGain.gain.value = vol;
-          lfo.connect(lfoDepth); lfoDepth.connect(oscGain.gain);
-          osc.connect(oscGain); oscGain.connect(master);
-          const filt = ctx.createBiquadFilter(); filt.type = "bandpass"; filt.Q.value = 1.5;
-          filt.frequency.setValueAtTime(300 + i * 80, ctx.currentTime);
-          filt.frequency.linearRampToValueAtTime(700 + i * 60, ctx.currentTime + 40);
-          filt.frequency.linearRampToValueAtTime(300 + i * 80, ctx.currentTime + 80);
-          oscGain.connect(filt); filt.connect(master);
-          osc.start(); lfo.start(); nodes.push(osc, lfo);
-        });
-        master.gain.linearRampToValueAtTime(0.18, ctx.currentTime + 2.5);
-
-      } else if (type === "beta") {
-        // Beta binaural (18 Hz) — active concentration, studying, problem solving
-        mkBinaural(200, 18); addAir(0.014);
-        [[250, 0.03], [375, 0.02], [500, 0.013]].forEach(([freq, vol], i) => {
-          const osc = ctx.createOscillator(); osc.type = "sine"; osc.frequency.value = freq;
-          const g = ctx.createGain(); g.gain.value = vol;
-          const lfo = ctx.createOscillator(); lfo.type = "sine"; lfo.frequency.value = 0.1 + i * 0.05;
-          const ld = ctx.createGain(); ld.gain.value = vol * 0.3;
-          lfo.connect(ld); ld.connect(g.gain);
-          osc.connect(g); g.connect(master);
-          osc.start(); lfo.start(); nodes.push(osc, lfo);
-        });
-        master.gain.linearRampToValueAtTime(0.16, ctx.currentTime + 2);
-
-      } else if (type === "theta") {
-        // Theta binaural (6 Hz) — creative flow state, meditation, deep relaxation
-        mkBinaural(200, 6); addAir(0.010);
-        [[180, 0.04], [270, 0.028], [360, 0.018], [540, 0.01]].forEach(([freq, vol], i) => {
-          const osc = ctx.createOscillator(); osc.type = "sine"; osc.frequency.value = freq;
-          const g = ctx.createGain(); g.gain.value = vol;
-          const lfo = ctx.createOscillator(); lfo.type = "sine"; lfo.frequency.value = 0.05 + i * 0.01;
-          const ld = ctx.createGain(); ld.gain.value = vol * 0.5;
-          lfo.connect(ld); ld.connect(g.gain);
-          osc.connect(g); g.connect(master);
-          osc.start(); lfo.start(); nodes.push(osc, lfo);
-        });
-        master.gain.linearRampToValueAtTime(0.17, ctx.currentTime + 3);
-
-      } else if (type === "fire") {
-        // Campfire: brown noise base + bandpass crackle modulated by 4 offset LFOs
-        const base = ctx.createBufferSource();
-        base.buffer = makeBrownNoiseBuffer(ctx, 6); base.loop = true;
-        const baseLpf = ctx.createBiquadFilter();
-        baseLpf.type = "lowpass"; baseLpf.frequency.value = 600; baseLpf.Q.value = 0.7;
-        const baseGain = ctx.createGain(); baseGain.gain.value = 0.18;
-        base.connect(baseLpf); baseLpf.connect(baseGain); baseGain.connect(master);
-        base.start(); nodes.push(base);
-
-        const crack = ctx.createBufferSource();
-        crack.buffer = makeNoiseBuffer(ctx, 4); crack.loop = true;
-        const bpf = ctx.createBiquadFilter();
-        bpf.type = "bandpass"; bpf.frequency.value = 1200; bpf.Q.value = 0.4;
-        const crackGain = ctx.createGain(); crackGain.gain.value = 0;
-        crack.connect(bpf); bpf.connect(crackGain); crackGain.connect(master);
-        crack.start(); nodes.push(crack);
-
-        const dc = ctx.createConstantSource(); dc.offset.value = 0.08;
-        dc.connect(crackGain.gain); dc.start(); nodes.push(dc);
-
-        [0.3, 0.7, 1.1, 1.7].forEach(hz => {
-          const lfo = ctx.createOscillator(); lfo.type = "sine"; lfo.frequency.value = hz;
-          const ld = ctx.createGain(); ld.gain.value = 0.045;
-          lfo.connect(ld); ld.connect(crackGain.gain);
-          lfo.start(); nodes.push(lfo);
-        });
-        master.gain.linearRampToValueAtTime(0.28, ctx.currentTime + 0.8);
-
-      } else if (type === "wind") {
-        // Wind: bandpass noise + 3 offset LFOs for gust variation
-        const src = ctx.createBufferSource();
-        src.buffer = makeNoiseBuffer(ctx, 6); src.loop = true;
-        const bpf = ctx.createBiquadFilter();
-        bpf.type = "bandpass"; bpf.frequency.value = 700; bpf.Q.value = 0.5;
-        const windGain = ctx.createGain(); windGain.gain.value = 0;
-        src.connect(bpf); bpf.connect(windGain); windGain.connect(master);
-        src.start(); nodes.push(src);
-
-        const dc = ctx.createConstantSource(); dc.offset.value = 0.35;
-        dc.connect(windGain.gain); dc.start(); nodes.push(dc);
-
-        [[0.07, 0.15], [0.18, 0.08], [0.31, 0.04]].forEach(([hz, depth]) => {
-          const lfo = ctx.createOscillator(); lfo.type = "sine"; lfo.frequency.value = hz;
-          const ld = ctx.createGain(); ld.gain.value = depth;
-          lfo.connect(ld); ld.connect(windGain.gain);
-          lfo.start(); nodes.push(lfo);
-        });
-        master.gain.linearRampToValueAtTime(0.24, ctx.currentTime + 1.2);
-
-      } else if (type === "focusPlus") {
-        // Focus+ — isochronic Beta AM at 15 Hz (brain.fm style, works without headphones)
-        // Beta boosts focus-associated brain activity. Isochronic = AM in both channels.
-        mkIsochronic(15, [[200, 0.18], [300, 0.10], [400, 0.06], [500, 0.03]]);
-        addAir(0.014);
-        master.gain.linearRampToValueAtTime(0.22, ctx.currentTime + 1.5);
-
-      } else if (type === "flow") {
-        // Flow State — isochronic at 12 Hz (alpha/beta border)
-        // The 12 Hz "sensorimotor rhythm" is associated with relaxed, effortless concentration
-        mkIsochronic(12, [[220, 0.16], [330, 0.10], [440, 0.07], [550, 0.04]]);
-        // Slow evolving pad underneath
-        [[165, 0.03], [247, 0.02], [330, 0.015]].forEach(([freq, vol], i) => {
-          const osc = ctx.createOscillator(); osc.type = "sine"; osc.frequency.value = freq;
-          const g = ctx.createGain(); g.gain.value = vol;
-          const lfo = ctx.createOscillator(); lfo.type = "sine"; lfo.frequency.value = 0.04 + i * 0.01;
-          const ld = ctx.createGain(); ld.gain.value = vol * 0.4;
-          lfo.connect(ld); ld.connect(g.gain);
-          osc.connect(g); g.connect(master);
-          osc.start(); lfo.start(); nodes.push(osc, lfo);
-        });
-        addAir(0.010);
-        master.gain.linearRampToValueAtTime(0.20, ctx.currentTime + 2);
-
-      } else if (type === "delta") {
-        // Delta — isochronic at 2.5 Hz (deep rest, sleep prep, recovery)
-        // Very slow AM pulse creates a deeply grounding, sleep-inducing effect
-        mkIsochronic(2.5, [[100, 0.20], [150, 0.12], [200, 0.07]]);
-        // Warm brown noise bed for texture
-        const src = ctx.createBufferSource();
-        src.buffer = makeBrownNoiseBuffer(ctx, 6); src.loop = true;
-        const lpf = ctx.createBiquadFilter(); lpf.type = "lowpass"; lpf.frequency.value = 300;
-        const ng = ctx.createGain(); ng.gain.value = 0.12;
-        src.connect(lpf); lpf.connect(ng); ng.connect(master);
-        src.start(); nodes.push(src);
-        master.gain.linearRampToValueAtTime(0.24, ctx.currentTime + 3);
-      }
+      const creator = SOUND_CREATORS[type];
+      if (creator) creator(ctx, master, nodes);
 
       if (isSecondary) ambientRef2.current = { nodes, gain: master, scaleGain };
       else ambientRef.current = { nodes, gain: master, scaleGain };
     } catch (_) {}
   }, [getCtx, getOrCreateEQ, stopAmbient, stopAmbientMix]);
 
-  // Live EQ updates — no restart needed, just change filter gain values
+  // Live EQ updates — no restart needed
   useEffect(() => {
     if (!eqRef.current) return;
     Object.keys(eqRef.current).forEach(k => {
@@ -633,13 +259,12 @@ export default function PomodoroTimer() {
     if (volumeGainRef.current) {
       volumeGainRef.current.gain.setTargetAtTime(settings.ambientVolume, audioCtxRef.current?.currentTime ?? 0, 0.02);
     }
-    // Sync YouTube player volume (brain.fm — separate audio system)
     if (ytPlayerRef.current && typeof ytPlayerRef.current.setVolume === "function") {
       ytPlayerRef.current.setVolume(Math.round(settings.ambientVolume * 100));
     }
   }, [settings.ambientVolume]);
 
-  // Live mix ratio update — scale secondary ambient when ratio changes
+  // Live mix ratio update
   useEffect(() => {
     if (ambientRef2.current?.scaleGain) {
       ambientRef2.current.scaleGain.gain.setTargetAtTime(
@@ -663,12 +288,11 @@ export default function PomodoroTimer() {
     }
   }, [isRunning]);
 
-  // Preview ambient for 5s when user selects a sound (timer not running)
   const previewAmbient = useCallback((val) => {
     if (val === "off") { isPreviewingRef.current = false; stopAmbient(); return; }
-    if (isRunning) return; // timer already driving audio, no preview needed
+    if (isRunning) return;
     if (previewTimeoutRef.current) clearTimeout(previewTimeoutRef.current);
-    isPreviewingRef.current = true;  // flag: tell the effect not to kill this
+    isPreviewingRef.current = true;
     startAmbient(val);
     previewTimeoutRef.current = setTimeout(() => {
       isPreviewingRef.current = false;
@@ -690,7 +314,6 @@ export default function PomodoroTimer() {
     }, 5000);
   }, [isRunning, startAmbient, stopAmbientMix]);
 
-  // Ambient effect — skip stopAmbient when a preview is intentionally playing
   useEffect(() => {
     if (isRunning && settings.ambient !== "off") {
       isPreviewingRef.current = false;
@@ -701,7 +324,6 @@ export default function PomodoroTimer() {
     return () => { if (!isPreviewingRef.current) stopAmbient(); };
   }, [isRunning, settings.ambient, startAmbient, stopAmbient]);
 
-  // Mix ambient effect
   useEffect(() => {
     if (isRunning && settings.ambientMix !== "off") {
       isPreviewingMixRef.current = false;
@@ -730,21 +352,6 @@ export default function PomodoroTimer() {
     window.onYouTubeIframeAPIReady = () => { ytApiReadyRef.current = true; };
   }, []);
 
-  const createYtPlayer = useCallback((videoId) => {
-    if (!ytApiReadyRef.current || !window.YT) return;
-    if (ytPlayerRef.current) {
-      try { ytPlayerRef.current.destroy(); } catch (_) {}
-      ytPlayerRef.current = null;
-    }
-    ytPlayerRef.current = new window.YT.Player("yt-player-div", {
-      videoId,
-      playerVars: { autoplay: 0, controls: 0, rel: 0, modestbranding: 1, playsinline: 1 },
-      events: {
-        onReady: (e) => { if (isRunningRef.current) e.target.playVideo(); },
-      },
-    });
-  }, []);
-
   // Sync YouTube player with timer running state (only after user activated it)
   useEffect(() => {
     if (!ytActivatedRef.current) return;
@@ -757,8 +364,18 @@ export default function PomodoroTimer() {
     }
   }, [isRunning, settings.ambient, ytActivated]);
 
-  // Keyboard shortcuts
+  // ── Keyboard shortcuts ────────────────────────────────────────────────────
+
   useEffect(() => {
+    const switchModeKey = (m) => {
+      if (modeRef.current === m) return;
+      clearInterval(intervalRef.current);
+      setIsRunning(false); completedRef.current = false;
+      setMode(m); modeRef.current = m;
+      setRingTransition(false); setTimeout(() => setRingTransition(true), 60);
+      setTimeLeft(getDuration(m, settingsRef.current));
+      setDigitPop(true); setTimeout(() => setDigitPop(false), 420);
+    };
     const handler = (e) => {
       const tag = document.activeElement?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
@@ -770,7 +387,6 @@ export default function PomodoroTimer() {
         }
         setIsRunning(r => !r);
       } else if (e.key === "n" || e.key === "N") {
-        // Mark the first uncompleted task as done
         setTasks(ts => {
           const idx = ts.findIndex(t => !t.done);
           if (idx === -1) return ts;
@@ -788,24 +404,12 @@ export default function PomodoroTimer() {
       else if (e.key === "3") switchModeKey("longBreak");
       else if (e.key === "Escape") {
         setShowSettings(false); setShowTasks(false); setShowShortcuts(false);
-        // Exit minimal mode — but only if not currently in fullscreen
-        // (browser handles Escape→exit-fullscreen first; next Escape then exits minimal)
         if (!document.fullscreenElement) setMinimalMode(false);
-      }
-      else if (e.key === "?") setShowShortcuts(s => !s);
+      } else if (e.key === "?") setShowShortcuts(s => !s);
       else if (e.key === "s" || e.key === "S") {
         setShowSettings(s => !s);
         setShowTasks(false);
       }
-    };
-    const switchModeKey = (m) => {
-      if (modeRef.current === m) return;
-      clearInterval(intervalRef.current);
-      setIsRunning(false); completedRef.current = false;
-      setMode(m); modeRef.current = m;
-      setRingTransition(false); setTimeout(() => setRingTransition(true), 60);
-      setTimeLeft(getDuration(m, settingsRef.current));
-      setDigitPop(true); setTimeout(() => setDigitPop(false), 420);
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
@@ -836,6 +440,8 @@ export default function PomodoroTimer() {
     };
   }, []);
 
+  // ── Controls ──────────────────────────────────────────────────────────────
+
   const resetRing = useCallback(() => {
     setRingTransition(false);
     setTimeout(() => setRingTransition(true), 60);
@@ -851,7 +457,6 @@ export default function PomodoroTimer() {
     try { new Notification(title, { body, silent: true }); } catch (_) {}
   };
 
-  // Session complete
   const completeSession = useCallback(() => {
     clearInterval(intervalRef.current);
     setIsRunning(false);
@@ -870,11 +475,11 @@ export default function PomodoroTimer() {
     if (m === "focus") {
       newSess = sess + 1;
       setBreakCycleCount(newSess);
-      nextMode = newSess % (settingsRef.current.longBreakInterval || 4) === 0 ? "longBreak" : "shortBreak";
+      nextMode = newSess % (s.longBreakInterval || 4) === 0 ? "longBreak" : "shortBreak";
       newToday = curToday + 1;
       if (curToday === 0) {
         try {
-          const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+          const stored = JSON.parse(localStorage.getItem("pomodoro_data") || "{}");
           const t = todayStr(), y = yesterdayStr();
           if (stored.date === t) newStreak = curStreak;
           else if (stored.date === y) newStreak = curStreak + 1;
@@ -892,7 +497,7 @@ export default function PomodoroTimer() {
       });
       let updatedTotals;
       setTotals(prev => {
-        const focusMinutes = Math.round(settingsRef.current.focus);
+        const focusMinutes = Math.round(s.focus);
         const updated = {
           sessions: (prev.sessions ?? 0) + 1,
           minutes:  (prev.minutes  ?? 0) + focusMinutes,
@@ -902,7 +507,6 @@ export default function PomodoroTimer() {
         updatedTotals = updated;
         return updated;
       });
-      // Check achievements
       setAchievements(prev => {
         const earned = [...prev];
         let newlyEarned = null;
@@ -915,7 +519,7 @@ export default function PomodoroTimer() {
         });
         if (newlyEarned) {
           saveAchievements(earned);
-          const deLangAch = settingsRef.current.lang !== "en";
+          const deLangAch = s.lang !== "en";
           setTimeout(() => {
             setNewAchievement({ icon: newlyEarned.icon, name: deLangAch ? newlyEarned.de : newlyEarned.en });
             setTimeout(() => setNewAchievement(null), 3500);
@@ -925,8 +529,8 @@ export default function PomodoroTimer() {
         }
         return earned;
       });
-      const deLang = settingsRef.current.lang !== "en";
-      const goalReached = newToday >= settingsRef.current.dailyGoal && curToday < settingsRef.current.dailyGoal;
+      const deLang = s.lang !== "en";
+      const goalReached = newToday >= s.dailyGoal && curToday < s.dailyGoal;
       if (goalReached) {
         sendNotif(
           deLang ? "🎉 Tagesziel erreicht!" : "🎉 Daily goal reached!",
@@ -943,7 +547,7 @@ export default function PomodoroTimer() {
       }
     } else {
       nextMode = "focus";
-      const deLang = settingsRef.current.lang !== "en";
+      const deLang = s.lang !== "en";
       sendNotif(
         deLang ? "☕ Pause vorbei!" : "☕ Break's over!",
         deLang ? "Zeit für eine neue Focus-Session." : "Time for a new focus session."
@@ -980,7 +584,6 @@ export default function PomodoroTimer() {
     if (isRunning && timeLeft > 0 && timeLeft % 60 === 0) playTick();
   }, [timeLeft, isRunning, playTick]);
 
-  // Controls
   const switchMode = (m) => {
     if (m === mode) return;
     clearInterval(intervalRef.current);
@@ -1020,7 +623,7 @@ export default function PomodoroTimer() {
     return () => document.removeEventListener("fullscreenchange", onFsChange);
   }, []);
 
-  // Media Session API — OS media controls (lock screen, media keys)
+  // Media Session API — OS media controls
   useEffect(() => {
     if (!("mediaSession" in navigator)) return;
     navigator.mediaSession.metadata = new window.MediaMetadata({
@@ -1038,10 +641,7 @@ export default function PomodoroTimer() {
     if (!isRunning || mode === "focus") { setBreathPhase("inhale"); return; }
     let phase = "inhale";
     setBreathPhase("inhale");
-    const cycle = () => {
-      phase = phase === "inhale" ? "exhale" : "inhale";
-      setBreathPhase(phase);
-    };
+    const cycle = () => { phase = phase === "inhale" ? "exhale" : "inhale"; setBreathPhase(phase); };
     const id = setInterval(cycle, 4000);
     return () => clearInterval(id);
   }, [isRunning, mode]);
@@ -1069,7 +669,8 @@ export default function PomodoroTimer() {
     });
   };
 
-  // Derived
+  // ── Derived values ────────────────────────────────────────────────────────
+
   const total = getDuration(mode, settings);
   const progress = total > 0 ? timeLeft / total : 1;
   const dashOffset = C * (1 - progress);
@@ -1083,6 +684,7 @@ export default function PomodoroTimer() {
     : isRunning ? "ringPulse 2.8s ease-in-out infinite" : "none";
   const lm = settings.lightMode;
   const de = settings.lang !== "en";
+
   const i18n = {
     focus:        de ? "Fokus"        : "Focus",
     shortBreak:   de ? "Kurze Pause"  : "Short Break",
@@ -1131,47 +733,50 @@ export default function PomodoroTimer() {
     breathOut:    de ? "Ausatmen"    : "Breathe out",
     achievements: de ? "Erfolge"     : "Achievements",
     daySummary:   de ? "Tageszusammenfassung" : "Day Summary",
-    export:       de ? "Exportieren" : "Export data",
     autoDark:     de ? "Auto Dark-Mode" : "Auto dark mode",
     uiScaleLbl:   de ? "UI-Größe"   : "UI scale",
     mixRatio:     de ? "Mix-Anteil"  : "Mix ratio",
   };
+
   const modeLabels = {
     focus:      de ? "Fokus"         : "Focus",
     shortBreak: de ? "Kurze Pause"   : "Short Break",
     longBreak:  de ? "Lange Pause"   : "Long Break",
   };
-  const T = useMemo(() => ({
-    bg:        lm ? "#f5f0ea" : "#0a0a0a",
-    card:      lm ? "#ede8e0" : "#0d0d0d",
-    border:    lm ? "#ddd8cf" : "#1c1c1c",
-    text:      lm ? "#1a1a1a" : "#f0ede8",
-    textDim:   lm ? "#888" : "#3a3a3a",
-    textDim2:  lm ? "#aaa" : "#252525",
-    textMid:   lm ? "#555" : "#777",
-    tabBg:     lm ? "#e8e3da" : "#111",
-    tabActive: lm ? "#ddd8cf" : "#1d1d1d",
-    panelBg:   lm ? "#ede8e0" : "#0d0d0d",
-    inputBg:   lm ? "#e4dfd6" : "#141414",
-    inputBdr:  lm ? "#c8c2b8" : "#222",
-    accent:    settings.accentColor ?? "#e07b39",
-    accentDim: lm ? "#c4681a" : "#3d2010",
-    barEmpty:  lm ? "#e0dad0" : "#181818",
-    rowHover:  lm ? "#e4dfd6" : "#131313",
-    toggleOff: lm ? "#d0cbc2" : "#1e1e1e",
-    shadow:    lm ? "0 24px 60px rgba(0,0,0,0.12)" : "0 24px 60px rgba(0,0,0,0.75)",
-    ringSub:   lm ? "#e0dad0" : "#181818",
-    ringGhost: lm ? "rgba(224,123,57,0.12)" : "rgba(224,123,57,0.08)",
+
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  const T = useMemo(() => ({
+    bg:          lm ? "#f5f0ea" : "#0a0a0a",
+    card:        lm ? "#ede8e0" : "#0d0d0d",
+    border:      lm ? "#ddd8cf" : "#1c1c1c",
+    text:        lm ? "#1a1a1a" : "#f0ede8",
+    textDim:     lm ? "#888" : "#3a3a3a",
+    textDim2:    lm ? "#aaa" : "#252525",
+    textMid:     lm ? "#555" : "#777",
+    tabBg:       lm ? "#e8e3da" : "#111",
+    tabActive:   lm ? "#ddd8cf" : "#1d1d1d",
+    panelBg:     lm ? "#ede8e0" : "#0d0d0d",
+    inputBg:     lm ? "#e4dfd6" : "#141414",
+    inputBdr:    lm ? "#c8c2b8" : "#222",
+    accent:      settings.accentColor ?? "#e07b39",
+    accentDim:   lm ? "#c4681a" : "#3d2010",
+    barEmpty:    lm ? "#e0dad0" : "#181818",
+    rowHover:    lm ? "#e4dfd6" : "#131313",
+    toggleOff:   lm ? "#d0cbc2" : "#1e1e1e",
+    toggleThumb: lm ? "#aaa"    : "#383838",
+    shadow:      lm ? "0 24px 60px rgba(0,0,0,0.12)" : "0 24px 60px rgba(0,0,0,0.75)",
+    ringSub:     lm ? "#e0dad0" : "#181818",
+    ringGhost:   lm ? "rgba(224,123,57,0.12)" : "rgba(224,123,57,0.08)",
   }), [lm, settings.accentColor]);
 
   // Find Monday of current week
   const todayDate = new Date();
-  const dow = todayDate.getDay(); // 0=Sun, 1=Mon
+  const dow = todayDate.getDay();
   const monday = new Date(todayDate);
   monday.setDate(todayDate.getDate() - ((dow + 6) % 7));
   monday.setHours(0, 0, 0, 0);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const last7Days = useMemo(() => {
     const dayLabels = de ? ["Mo","Di","Mi","Do","Fr","Sa","So"] : ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
     return Array.from({ length: 7 }, (_, i) => {
@@ -1184,11 +789,9 @@ export default function PomodoroTimer() {
       const count = isToday ? todaySessions : (weekData[dateStr] ?? 0);
       return { date: dateStr, label, count, isFuture, isToday };
     });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [weekData, todaySessions, de]);
   const weekMax = Math.max(...last7Days.map(d => d.count), 1);
 
-  // Level system
   const LEVELS = [
     { min: 0,   icon: "🌱", name: de ? "Sämling"  : "Seedling", next: 5   },
     { min: 5,   icon: "🌿", name: de ? "Spross"   : "Sprout",   next: 15  },
@@ -1224,20 +827,27 @@ export default function PomodoroTimer() {
       padding: "5px 6px", fontSize: 13, fontFamily: "'DM Sans', sans-serif",
       transition: "border-color 0.15s",
     },
+    // Reusable: the settings panel list row
+    settingsRow: (showBorder) => ({
+      display: "flex", alignItems: "center", justifyContent: "space-between",
+      padding: "9px 12px",
+      borderBottom: showBorder ? `1px solid ${T.border}` : "none",
+    }),
+    // Reusable: circular icon button (top corners, bottom bar)
+    iconBtn: (isActive) => ({
+      width: 30, height: 30, borderRadius: "50%",
+      background: "transparent", border: "none", cursor: "pointer",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      color: isActive ? T.accent : T.textMid,
+      transition: "color 0.2s",
+    }),
   };
-
-  const Toggle = ({ val, onToggle, label }) => (
-    <button onClick={onToggle} role="switch" aria-checked={val} aria-label={`Toggle ${label}`}
-      style={{ width: 38, height: 21, borderRadius: 100, background: val ? T.accent : T.toggleOff,
-        border: "none", cursor: "pointer", position: "relative", transition: "background 0.2s", flexShrink: 0 }}>
-      <div style={{ width: 15, height: 15, borderRadius: "50%", background: val ? T.bg : (lm ? "#aaa" : "#383838"),
-        position: "absolute", top: 3, left: val ? 20 : 3, transition: "left 0.18s ease-out, background 0.18s" }} />
-    </button>
-  );
 
   const isMobile = useMemo(() =>
     /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || window.innerWidth < 768
   , []);
+
+  // ── Render ────────────────────────────────────────────────────────────────
 
   return (
     <div className="relative flex items-center justify-center"
@@ -1250,46 +860,39 @@ export default function PomodoroTimer() {
       <div style={{ position: "absolute", width: 600, height: 600, borderRadius: "50%",
         background: "radial-gradient(circle, rgba(224,123,57,0.04) 0%, transparent 70%)", pointerEvents: "none" }} />
 
-
       {/* Minimal mode toggle — top-left */}
       <button
         onClick={() => setMinimalMode(m => !m)}
         aria-label={minimalMode ? i18n.vollansicht : i18n.minimal}
         title={minimalMode ? i18n.vollansicht : i18n.minimal}
-        style={{ position: "fixed", top: 20, left: 24, width: 30, height: 30, borderRadius: "50%",
-          background: "transparent", border: "none", cursor: "pointer", display: "flex",
-          alignItems: "center", justifyContent: "center",
-          color: minimalMode ? T.accent : T.textMid, transition: "color 0.2s", zIndex: 60 }}
-        onMouseEnter={e => { if (!minimalMode) e.currentTarget.style.color=T.text; }}
-        onMouseLeave={e => { e.currentTarget.style.color=minimalMode?T.accent:T.textMid; }}>
+        style={{ ...S.iconBtn(minimalMode), position: "fixed", top: 20, left: 24, zIndex: 60 }}
+        onMouseEnter={e => { if (!minimalMode) e.currentTarget.style.color = T.text; }}
+        onMouseLeave={e => { e.currentTarget.style.color = minimalMode ? T.accent : T.textMid; }}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           {minimalMode
-            ? /* eye — "show full UI" */
-              <><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></>
-            : /* eye-off — "hide UI / enter minimal" */
-              <><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></>
+            ? <><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></>
+            : <><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></>
           }
         </svg>
       </button>
 
-      {/* Fullscreen toggle — top-right (desktop only, hidden when settings open) */}
-      {!isMobile && !showSettings && <button
-        onClick={toggleFullscreen}
-        aria-label={isFullscreen ? i18n.exitFs : i18n.fullscreen}
-        title={isFullscreen ? i18n.exitFs : i18n.fullscreen}
-        style={{ position: "fixed", top: 20, right: 24, width: 30, height: 30, borderRadius: "50%",
-          background: "transparent", border: "none", cursor: "pointer", display: "flex",
-          alignItems: "center", justifyContent: "center",
-          color: isFullscreen ? T.accent : T.textMid, transition: "color 0.2s", zIndex: 60 }}
-        onMouseEnter={e => { if (!isFullscreen) e.currentTarget.style.color=T.text; }}
-        onMouseLeave={e => { e.currentTarget.style.color=isFullscreen?T.accent:T.textMid; }}>
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          {isFullscreen
-            ? <><path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/></>
-            : <><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/></>
-          }
-        </svg>
-      </button>}
+      {/* Fullscreen toggle — top-right (desktop only) */}
+      {!isMobile && !showSettings && (
+        <button
+          onClick={toggleFullscreen}
+          aria-label={isFullscreen ? i18n.exitFs : i18n.fullscreen}
+          title={isFullscreen ? i18n.exitFs : i18n.fullscreen}
+          style={{ ...S.iconBtn(isFullscreen), position: "fixed", top: 20, right: 24, zIndex: 60 }}
+          onMouseEnter={e => { if (!isFullscreen) e.currentTarget.style.color = T.text; }}
+          onMouseLeave={e => { e.currentTarget.style.color = isFullscreen ? T.accent : T.textMid; }}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            {isFullscreen
+              ? <><path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/></>
+              : <><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/></>
+            }
+          </svg>
+        </button>
+      )}
 
       {/* Minimal mode overlay */}
       {minimalMode && (
@@ -1468,7 +1071,7 @@ export default function PomodoroTimer() {
         {/* Session progress + stats */}
         <div className="flex flex-col items-center" style={{ gap: 8 }}>
 
-          {/* Row 1: count + progress bar + % inline */}
+          {/* Row 1: count + progress bar + % */}
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ fontSize: 12, color: progressPct >= 100 ? T.accent : T.textDim, transition: "color 0.3s", whiteSpace: "nowrap" }}>
               {todaySessions} / {settings.dailyGoal} {i18n.heute}
@@ -1484,7 +1087,7 @@ export default function PomodoroTimer() {
             </span>
           </div>
 
-          {/* Row 2: streak + level (only if data exists) */}
+          {/* Row 2: streak + level */}
           {(streak > 0 || totalSess > 0) && (
             <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12, color: T.textDim }}>
               {streak > 0 && (
@@ -1549,26 +1152,23 @@ export default function PomodoroTimer() {
       </div>
 
       {/* Bottom-left: shortcuts (desktop only) */}
-      {!isMobile && <button onClick={() => setShowShortcuts(s => !s)} aria-label="Keyboard shortcuts"
-        style={{ position: "fixed", bottom: 24, left: 28, width: 36, height: 36, borderRadius: "50%",
-          background: "transparent", border: "none", cursor: "pointer", display: "flex",
-          alignItems: "center", justifyContent: "center",
-          color: showShortcuts ? T.accent : T.textMid, transition: "color 0.2s",
-          fontFamily: "monospace", fontSize: 15, fontWeight: 700 }}
-        onMouseEnter={e => { if (!showShortcuts) e.currentTarget.style.color=T.text; }}
-        onMouseLeave={e => { e.currentTarget.style.color=showShortcuts?T.accent:T.textMid; }}>
-        ?
-      </button>}
+      {!isMobile && (
+        <button onClick={() => setShowShortcuts(s => !s)} aria-label="Keyboard shortcuts"
+          style={{ ...S.iconBtn(showShortcuts), position: "fixed", bottom: 24, left: 28, width: 36, height: 36,
+            fontFamily: "monospace", fontSize: 15, fontWeight: 700 }}
+          onMouseEnter={e => { if (!showShortcuts) e.currentTarget.style.color = T.text; }}
+          onMouseLeave={e => { e.currentTarget.style.color = showShortcuts ? T.accent : T.textMid; }}>
+          ?
+        </button>
+      )}
 
       {/* Bottom-right: tasks + settings */}
       <div style={{ position: "fixed", bottom: "max(20px, env(safe-area-inset-bottom, 20px))", right: 24, display: "flex", gap: 2, zIndex: 40 }}>
         <button onClick={() => { setShowTasks(s => !s); setShowSettings(false); }}
           aria-label="Toggle task list"
-          style={{ width: 36, height: 36, borderRadius: "50%", background: "transparent", border: "none",
-            cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
-            color: showTasks ? T.accent : T.textMid, transition: "color 0.2s" }}
-          onMouseEnter={e => { if (!showTasks) e.currentTarget.style.color=T.text; }}
-          onMouseLeave={e => { e.currentTarget.style.color=showTasks?T.accent:T.textMid; }}>
+          style={{ ...S.iconBtn(showTasks), width: 36, height: 36 }}
+          onMouseEnter={e => { if (!showTasks) e.currentTarget.style.color = T.text; }}
+          onMouseLeave={e => { e.currentTarget.style.color = showTasks ? T.accent : T.textMid; }}>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/>
             <line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>
@@ -1576,11 +1176,9 @@ export default function PomodoroTimer() {
         </button>
         <button onClick={() => { setShowSettings(s => !s); setShowTasks(false); }}
           aria-label="Toggle settings panel"
-          style={{ width: 36, height: 36, borderRadius: "50%", background: "transparent", border: "none",
-            cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
-            color: showSettings ? T.accent : T.textMid, transition: "color 0.2s" }}
-          onMouseEnter={e => { if (!showSettings) e.currentTarget.style.color=T.text; }}
-          onMouseLeave={e => { e.currentTarget.style.color=showSettings?T.accent:T.textMid; }}>
+          style={{ ...S.iconBtn(showSettings), width: 36, height: 36 }}
+          onMouseEnter={e => { if (!showSettings) e.currentTarget.style.color = T.text; }}
+          onMouseLeave={e => { e.currentTarget.style.color = showSettings ? T.accent : T.textMid; }}>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="12" cy="12" r="3"/>
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
@@ -1588,7 +1186,7 @@ export default function PomodoroTimer() {
         </button>
       </div>
 
-      {/* Mobile backdrop — dims content when task or settings panel is open */}
+      {/* Mobile backdrop */}
       {isMobile && (showTasks || showSettings) && (
         <div onClick={() => { setShowTasks(false); setShowSettings(false); }}
           style={{ position: "fixed", inset: 0, zIndex: 29,
@@ -1629,12 +1227,13 @@ export default function PomodoroTimer() {
                     style={{ display: "flex", alignItems: "center", gap: 7, padding: "5px 6px",
                       borderRadius: 8, marginBottom: 3, background: "transparent",
                       opacity: task.done ? 0.4 : 1, transition: "opacity 0.2s, background 0.15s" }}>
-                    {/* Up/down reorder */}
                     <div style={{ display: "flex", flexDirection: "column", gap: 0, flexShrink: 0 }}>
                       <button onClick={() => moveTask(task.id, -1)} disabled={taskIdx === 0}
                         aria-label="Move task up"
-                        style={{ width: 14, height: 12, background: "transparent", border: "none", cursor: taskIdx === 0 ? "default" : "pointer",
-                          color: taskIdx === 0 ? T.inputBdr : T.textDim, display: "flex", alignItems: "center", justifyContent: "center",
+                        style={{ width: 14, height: 12, background: "transparent", border: "none",
+                          cursor: taskIdx === 0 ? "default" : "pointer",
+                          color: taskIdx === 0 ? T.inputBdr : T.textDim,
+                          display: "flex", alignItems: "center", justifyContent: "center",
                           padding: 0, transition: "color 0.15s" }}
                         onMouseEnter={e => { if (taskIdx !== 0) e.currentTarget.style.color=T.textMid; }}
                         onMouseLeave={e => { e.currentTarget.style.color=taskIdx===0?T.inputBdr:T.textDim; }}>
@@ -1644,8 +1243,10 @@ export default function PomodoroTimer() {
                       </button>
                       <button onClick={() => moveTask(task.id, 1)} disabled={taskIdx === tasks.length - 1}
                         aria-label="Move task down"
-                        style={{ width: 14, height: 12, background: "transparent", border: "none", cursor: taskIdx === tasks.length - 1 ? "default" : "pointer",
-                          color: taskIdx === tasks.length - 1 ? T.inputBdr : T.textDim, display: "flex", alignItems: "center", justifyContent: "center",
+                        style={{ width: 14, height: 12, background: "transparent", border: "none",
+                          cursor: taskIdx === tasks.length - 1 ? "default" : "pointer",
+                          color: taskIdx === tasks.length - 1 ? T.inputBdr : T.textDim,
+                          display: "flex", alignItems: "center", justifyContent: "center",
                           padding: 0, transition: "color 0.15s" }}
                         onMouseEnter={e => { if (taskIdx !== tasks.length - 1) e.currentTarget.style.color=T.textMid; }}
                         onMouseLeave={e => { e.currentTarget.style.color=taskIdx===tasks.length-1?T.inputBdr:T.textDim; }}>
@@ -1702,8 +1303,7 @@ export default function PomodoroTimer() {
           <p style={{ ...S.sectionLabel, marginBottom: 8 }}>{de ? "Timer" : "Timer"}</p>
           <div style={{ background: T.tabBg, borderRadius: 10, marginBottom: 6 }}>
             {[["focus", modeLabels.focus],["shortBreak", de?"Kurze Pause":"Short Break"],["longBreak", de?"Lange Pause":"Long Break"]].map(([key, label], i, arr) => (
-              <div key={key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
-                padding: "9px 12px", borderBottom: i < arr.length - 1 ? `1px solid ${T.border}` : "none" }}>
+              <div key={key} style={S.settingsRow(i < arr.length - 1)}>
                 <span style={{ fontSize: 13, color: T.text }}>{label}</span>
                 <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
                   <DurationInput value={settings[key]} onChange={v => updateDuration(key, v)}
@@ -1715,8 +1315,7 @@ export default function PomodoroTimer() {
           </div>
           <div style={{ background: T.tabBg, borderRadius: 10, marginBottom: 16 }}>
             {[[de?"Lange Pause nach":"Long break after","longBreakInterval",1,8],[de?"Tagesziel":"Daily goal","dailyGoal",1,20]].map(([label, key, min, max], i, arr) => (
-              <div key={key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
-                padding: "9px 12px", borderBottom: i < arr.length - 1 ? `1px solid ${T.border}` : "none" }}>
+              <div key={key} style={S.settingsRow(i < arr.length - 1)}>
                 <span style={{ fontSize: 13, color: T.text }}>{label}</span>
                 <DurationInput value={settings[key]} min={min} max={max}
                   onChange={v => setSettings(s => ({ ...s, [key]: v }))}
@@ -1783,9 +1382,7 @@ export default function PomodoroTimer() {
                   </div>
                 </div>
 
-
-
-                {/* Off + category row */}
+                {/* Off + category tabs */}
                 <div style={{ background: T.tabBg, borderRadius: 10, padding: "8px 10px", marginBottom: 6 }}>
                   <div style={{ display: "flex", gap: 5 }}>
                     <button
@@ -1810,7 +1407,6 @@ export default function PomodoroTimer() {
                     <div style={{ display: "grid", gridTemplateColumns: `repeat(3, 1fr)`, gap: 5 }}>
                       {(cat === "neural" ? NEURAL : NATURE).map(([v, l]) => soundBtn(v, l))}
                     </div>
-                    {/* Mix row */}
                     {settings.ambient !== "off" && (
                       <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${T.border}` }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
@@ -1818,7 +1414,6 @@ export default function PomodoroTimer() {
                           <div style={{ flex: 1, height: 1, background: T.border }} />
                           {settings.ambientMix !== "off" && (
                             <button onClick={() => {
-                              // Stop the playing mix sound immediately regardless of preview/run state
                               isPreviewingMixRef.current = false;
                               if (previewMixTimeoutRef.current) { clearTimeout(previewMixTimeoutRef.current); previewMixTimeoutRef.current = null; }
                               stopAmbientMix();
@@ -2001,33 +1596,29 @@ export default function PomodoroTimer() {
             );
           })()}
 
-          {/* ── Verhalten ── */}
+          {/* ── Behavior ── */}
           <p style={{ ...S.sectionLabel, marginBottom: 8 }}>{de ? "Verhalten" : "Behavior"}</p>
           <div style={{ background: T.tabBg, borderRadius: 10, marginBottom: 16 }}>
             {[["autoStart",i18n.autoStart],["sound",i18n.chime],["tick",i18n.tick]].map(([key, label], i, arr) => (
-              <div key={key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
-                padding: "9px 12px", borderBottom: i < arr.length - 1 ? `1px solid ${T.border}` : "none" }}>
+              <div key={key} style={S.settingsRow(i < arr.length - 1)}>
                 <span style={{ fontSize: 13, color: T.text }}>{label}</span>
-                <Toggle val={settings[key]} onToggle={() => setSettings(s => ({ ...s, [key]: !s[key] }))} label={label} />
+                <Toggle val={settings[key]} onToggle={() => setSettings(s => ({ ...s, [key]: !s[key] }))} label={label} T={T} />
               </div>
             ))}
           </div>
 
-          {/* ── Darstellung ── */}
+          {/* ── Appearance ── */}
           <p style={{ ...S.sectionLabel, marginBottom: 8 }}>{de ? "Darstellung" : "Appearance"}</p>
           <div style={{ background: T.tabBg, borderRadius: 10 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
-              padding: "9px 12px", borderBottom: `1px solid ${T.border}` }}>
+            <div style={S.settingsRow(true)}>
               <span style={{ fontSize: 13, color: T.text }}>{i18n.autoDark}</span>
-              <Toggle val={settings.autoDark} onToggle={() => setSettings(s => ({ ...s, autoDark: !s.autoDark }))} label="Auto dark" />
+              <Toggle val={settings.autoDark} onToggle={() => setSettings(s => ({ ...s, autoDark: !s.autoDark }))} label="Auto dark" T={T} />
             </div>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
-              padding: "9px 12px", borderBottom: `1px solid ${T.border}` }}>
+            <div style={S.settingsRow(true)}>
               <span style={{ fontSize: 13, color: T.text }}>{de ? "Hell-Modus" : "Light mode"}</span>
-              <Toggle val={settings.lightMode} onToggle={() => setSettings(s => ({ ...s, lightMode: !s.lightMode }))} label="Light Mode" />
+              <Toggle val={settings.lightMode} onToggle={() => setSettings(s => ({ ...s, lightMode: !s.lightMode }))} label="Light Mode" T={T} />
             </div>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
-              padding: "9px 12px", borderBottom: `1px solid ${T.border}` }}>
+            <div style={S.settingsRow(true)}>
               <span style={{ fontSize: 13, color: T.text }}>{de ? "Sprache" : "Language"}</span>
               <div style={{ display: "flex", borderRadius: 7, overflow: "hidden", border: `1px solid ${T.border}` }}>
                 {["de","en"].map(l => (
@@ -2041,8 +1632,7 @@ export default function PomodoroTimer() {
                 ))}
               </div>
             </div>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
-              padding: "9px 12px", borderBottom: `1px solid ${T.border}` }}>
+            <div style={S.settingsRow(true)}>
               <span style={{ fontSize: 13, color: T.text }}>{i18n.uiScaleLbl}</span>
               <div style={{ display: "flex", borderRadius: 7, overflow: "hidden", border: `1px solid ${T.border}` }}>
                 {["S","M","L"].map(sz => (
@@ -2056,8 +1646,7 @@ export default function PomodoroTimer() {
                 ))}
               </div>
             </div>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
-              padding: "9px 12px", borderBottom: `1px solid ${T.border}` }}>
+            <div style={S.settingsRow(false)}>
               <span style={{ fontSize: 13, color: T.text }}>{de ? "Akzentfarbe" : "Accent"}</span>
               <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
                 {["#e07b39","#4a9eff","#7c5cbf","#3db87a","#e05555","#d4a017"].map(c => (
@@ -2071,7 +1660,7 @@ export default function PomodoroTimer() {
             </div>
           </div>
 
-          {/* Daten */}
+          {/* ── Data ── */}
           <div style={{ ...S.sectionLabel, marginTop: 10 }}>{de ? "Daten" : "Data"}</div>
           {achievements.length > 0 && (
             <div style={{ marginBottom: 6 }}>
@@ -2079,8 +1668,7 @@ export default function PomodoroTimer() {
               <div style={{ background: T.tabBg, borderRadius: 10, padding: "10px 12px", border: `1px solid ${T.border}` }}>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
                   {ACHIEVEMENT_DEFS.filter(d => achievements.includes(d.id)).map(d => (
-                    <span key={d.id} title={de ? d.de : d.en}
-                      style={{ fontSize: 18, cursor: "default" }}>
+                    <span key={d.id} title={de ? d.de : d.en} style={{ fontSize: 18, cursor: "default" }}>
                       {d.icon}
                     </span>
                   ))}
@@ -2091,9 +1679,9 @@ export default function PomodoroTimer() {
           <div style={{ background: T.tabBg, borderRadius: 10, overflow: "hidden", border: `1px solid ${T.border}` }}>
             <button onClick={() => {
               if (!window.confirm(de ? "Alle Statistiken zurücksetzen?" : "Reset all statistics?")) return;
-              localStorage.removeItem(STORAGE_KEY);
-              localStorage.removeItem(WEEK_KEY);
-              localStorage.removeItem(TOTALS_KEY);
+              localStorage.removeItem("pomodoro_data");
+              localStorage.removeItem("pomodoro_week");
+              localStorage.removeItem("focus_totals");
               setTodaySessions(0); setBreakCycleCount(0); setStreak(0);
               setWeekData({}); setTotals({});
             }} style={{ width: "100%", padding: "10px 12px", background: "none", border: "none",
@@ -2169,7 +1757,7 @@ export default function PomodoroTimer() {
         </div>
       )}
 
-      {/* Welcome popup — shown once on first visit */}
+      {/* Welcome popup */}
       {showWelcome && (
         <div onClick={() => { localStorage.setItem("focus_welcomed", "1"); setShowWelcome(false); }}
           style={{ position: "fixed", inset: 0, zIndex: 60, background: "rgba(0,0,0,0.78)",
