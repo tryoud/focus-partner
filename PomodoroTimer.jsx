@@ -10,6 +10,9 @@ import { SOUND_CREATORS } from "./audio/sounds.js";
 import DurationInput from "./components/DurationInput.jsx";
 import Toggle from "./components/Toggle.jsx";
 import CrystalRush from "./components/CrystalRush.jsx";
+import MemoryFlash from "./components/MemoryFlash.jsx";
+import Breakout from "./components/Breakout.jsx";
+import Sudoku from "./components/Sudoku.jsx";
 import PauseInvitation from "./components/PauseInvitation.jsx";
 
 export default function PomodoroTimer() {
@@ -41,13 +44,8 @@ export default function PomodoroTimer() {
   const [ytVideoId, setYtVideoId] = useState(null);
   const [ytActivated, setYtActivated] = useState(false);
   const [showPauseInvitation, setShowPauseInvitation] = useState(false);
-  const [showCrystalRush, setShowCrystalRush] = useState(false);
-  const [crystalHighscore, setCrystalHighscore] = useState(
-    () => { try { return parseInt(localStorage.getItem("focuspartner_crystal_rush_highscore") || "0"); } catch { return 0; } }
-  );
-  const [totalCrystals, setTotalCrystals] = useState(
-    () => { try { return parseInt(localStorage.getItem("focuspartner_total_crystals") || "0"); } catch { return 0; } }
-  );
+  const [activeGame, setActiveGame] = useState(null); // null | "crystal" | "memory" | "breakout" | "sudoku"
+  const activeGameRef = useRef(null);
 
   const ytActivatedRef = useRef(false);
   const pauseInvitationTimerRef = useRef(null);
@@ -394,6 +392,7 @@ export default function PomodoroTimer() {
       const tag = document.activeElement?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
       if (e.key === " ") {
+        if (activeGameRef.current) return; // let active game handle Space
         e.preventDefault();
         getCtx();
         if (typeof Notification !== "undefined" && Notification.permission === "default") {
@@ -474,6 +473,9 @@ export default function PomodoroTimer() {
   const completeSession = useCallback(() => {
     clearInterval(intervalRef.current);
     setIsRunning(false);
+    // Close any active game or invitation when a session ends
+    setActiveGame(null); activeGameRef.current = null;
+    setShowPauseInvitation(false);
     playChime();
     setFlash(true);
     setTimeout(() => setFlash(false), 950);
@@ -578,11 +580,11 @@ export default function PomodoroTimer() {
       // Crystal Rush invitation on break start
       if (nextMode === "shortBreak" || nextMode === "longBreak") {
         if (pauseInvitationTimerRef.current) clearTimeout(pauseInvitationTimerRef.current);
-        pauseInvitationTimerRef.current = setTimeout(() => setShowPauseInvitation(true), 3000);
+        pauseInvitationTimerRef.current = setTimeout(() => setShowPauseInvitation(true), 800);
       } else {
         // Returning to focus — clean up game state
         setShowPauseInvitation(false);
-        setShowCrystalRush(false);
+        setActiveGame(null); activeGameRef.current = null;
         if (pauseInvitationTimerRef.current) clearTimeout(pauseInvitationTimerRef.current);
       }
     }, 950);
@@ -622,19 +624,18 @@ export default function PomodoroTimer() {
     resetRing(); setTimeLeft(getDuration(mode, settings));
   };
 
-  const handleGameComplete = (score, crystalsEarned) => {
-    setShowCrystalRush(false);
-    if (score > crystalHighscore) {
-      setCrystalHighscore(score);
-      try { localStorage.setItem("focuspartner_crystal_rush_highscore", String(score)); } catch {}
-    }
-    const newTotal = totalCrystals + crystalsEarned;
-    setTotalCrystals(newTotal);
-    try { localStorage.setItem("focuspartner_total_crystals", String(newTotal)); } catch {}
-    if (timeLeft > 90) {
+  const handleGameComplete = useCallback(() => {
+    setActiveGame(null); activeGameRef.current = null;
+    const inBreak = modeRef.current === "shortBreak" || modeRef.current === "longBreak";
+    if (inBreak && isRunningRef.current && timeLeft > 90)
       setTimeout(() => setShowPauseInvitation(true), 2000);
-    }
-  };
+  }, [timeLeft]);
+
+  const handleGameSkip = useCallback(() => {
+    setActiveGame(null); activeGameRef.current = null;
+    const inBreak = modeRef.current === "shortBreak" || modeRef.current === "longBreak";
+    if (inBreak && isRunningRef.current && timeLeft > 90) setShowPauseInvitation(true);
+  }, [timeLeft]);
 
   const handleToggle = () => {
     getCtx();
@@ -1084,7 +1085,17 @@ export default function PomodoroTimer() {
               </svg>
             </button>
           ) : (
-            <div style={{ width: 46 }} />
+            <button onClick={completeSession} aria-label="Skip focus"
+              className="flex items-center justify-center"
+              style={{ width: 46, height: 46, borderRadius: "50%", background: T.inputBg,
+                border: `1px solid ${T.border}`, cursor: "pointer", color: T.textDim,
+                transition: "color 0.18s, background 0.18s, border-color 0.18s" }}
+              onMouseEnter={e => { e.currentTarget.style.color=T.text; e.currentTarget.style.background=T.tabActive; e.currentTarget.style.borderColor=T.inputBdr; }}
+              onMouseLeave={e => { e.currentTarget.style.color=T.textDim; e.currentTarget.style.background=T.inputBg; e.currentTarget.style.borderColor=T.border; }}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="5,4 15,12 5,20"/><line x1="19" y1="5" x2="19" y2="19"/>
+              </svg>
+            </button>
           )}
         </div>
 
@@ -1106,19 +1117,14 @@ export default function PomodoroTimer() {
           </div>
         )}
 
-        {/* Crystal Rush invitation banner */}
-        {(mode === "shortBreak" || mode === "longBreak") && showPauseInvitation && !showCrystalRush && (
+        {/* Game invitation banner */}
+        {(mode === "shortBreak" || mode === "longBreak") && isRunning && showPauseInvitation && !activeGame && (
           <PauseInvitation
             pauseTimeLeft={timeLeft}
-            onStartGame={() => { setShowPauseInvitation(false); setShowCrystalRush(true); }}
+            onStartGame={(gameId) => { setShowPauseInvitation(false); setActiveGame(gameId); activeGameRef.current = gameId; }}
             onSkip={() => setShowPauseInvitation(false)}
-            highscore={crystalHighscore}
+            T={T}
           />
-        )}
-
-        {/* Crystal total during breaks */}
-        {(mode === "shortBreak" || mode === "longBreak") && totalCrystals > 0 && !showPauseInvitation && !showCrystalRush && (
-          <div style={{ fontSize: 11, color: T.textDim2 }}>◆ {totalCrystals} Kristalle gesammelt</div>
         )}
 
         {/* Session progress + stats */}
@@ -1749,14 +1755,15 @@ export default function PomodoroTimer() {
       {/* YouTube player — always in DOM so YT.Player() can target it */}
       <div id="yt-player-div" style={{ width: 1, height: 1, opacity: 0, position: "fixed", top: -10, left: -10, pointerEvents: "none" }} />
 
-      {/* Crystal Rush full-screen overlay */}
-      {showCrystalRush && (
-        <div style={{ position: "fixed", inset: 0, zIndex: 50, background: "rgba(0,0,0,0.92)",
+      {/* Minigame full-screen overlay */}
+      {activeGame && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 50,
+          background: lm ? "rgba(245,240,234,0.94)" : "rgba(0,0,0,0.94)",
           display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <CrystalRush
-            onComplete={handleGameComplete}
-            onSkip={() => setShowCrystalRush(false)}
-          />
+          {activeGame === "crystal"  && <CrystalRush onComplete={handleGameComplete} onSkip={handleGameSkip} T={T} lm={lm} />}
+          {activeGame === "memory"   && <MemoryFlash onComplete={handleGameComplete} onSkip={handleGameSkip} T={T} lm={lm} />}
+          {activeGame === "breakout" && <Breakout    onComplete={handleGameComplete} onSkip={handleGameSkip} T={T} lm={lm} />}
+          {activeGame === "sudoku"   && <Sudoku      onComplete={handleGameComplete} onSkip={handleGameSkip} T={T} lm={lm} />}
         </div>
       )}
 

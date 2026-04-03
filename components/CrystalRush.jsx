@@ -24,14 +24,6 @@ function loadHighscore() {
   try { return parseInt(localStorage.getItem("focuspartner_crystal_rush_highscore") || "0"); } catch { return 0; }
 }
 
-function scoreToCrystals(score) {
-  if (score >= 201) return 5;
-  if (score >= 101) return 3;
-  if (score >= 51)  return 2;
-  if (score >= 21)  return 1;
-  return 0;
-}
-
 function getPhase(elapsed) {
   if (elapsed >= 50) return { speed: 5, spawnMs: 400, fever: true };
   if (elapsed >= 35) return { speed: 4, spawnMs: 400, fever: false };
@@ -39,12 +31,24 @@ function getPhase(elapsed) {
   return { speed: 2, spawnMs: 800, fever: false };
 }
 
-function spawnCrystal(canvasW) {
+function getComboMultiplier(combo) {
+  if (combo >= 8) return 3;
+  if (combo >= 3) return 2;
+  return 1;
+}
+
+function spawnCrystal(canvasW, lm, elapsed) {
   const r = Math.random();
   let type, color, pts;
-  if (r < 0.05) { type = "crystal"; color = "#a78bfa"; pts = 5; }
-  else if (r < 0.25) { type = "gold"; color = "#fbbf24"; pts = 3; }
-  else { type = "normal"; color = "#e2e8f0"; pts = 1; }
+  if (r < 0.05) {
+    type = "crystal"; color = "#a78bfa"; pts = 5;
+  } else if (r < 0.20) {
+    type = "gold"; color = "#f59e0b"; pts = 3;
+  } else if (r < 0.35 && elapsed >= 15) {
+    type = "bad"; color = "#ef4444"; pts = -3;
+  } else {
+    type = "normal"; color = lm ? "#64748b" : "#e2e8f0"; pts = 1;
+  }
   return {
     id: Math.random(),
     x: CRYSTAL_SIZE + Math.random() * (canvasW - CRYSTAL_SIZE * 2),
@@ -53,19 +57,15 @@ function spawnCrystal(canvasW) {
   };
 }
 
-function drawPlayer(ctx, x, canvasW) {
+function drawPlayer(ctx, x, canvasW, accent) {
   const px = Math.max(PLAYER_W / 2, Math.min(canvasW - PLAYER_W / 2, x));
-  // Body
-  ctx.fillStyle = "#e07b39";
+  ctx.fillStyle = accent;
   ctx.fillRect(px - 14, PLAYER_Y - 14, 28, 24);
-  // Ears
   ctx.fillRect(px - 12, PLAYER_Y - 20, 8, 8);
   ctx.fillRect(px + 4, PLAYER_Y - 20, 8, 8);
-  // Eyes
   ctx.fillStyle = "#0e0c09";
   ctx.fillRect(px - 7, PLAYER_Y - 8, 4, 4);
   ctx.fillRect(px + 3, PLAYER_Y - 8, 4, 4);
-  // Mouth
   ctx.fillRect(px - 3, PLAYER_Y - 1, 6, 2);
 }
 
@@ -75,7 +75,7 @@ function drawCrystal(ctx, crystal) {
   ctx.rotate(Math.PI / 4);
   ctx.fillStyle = crystal.color;
   ctx.shadowColor = crystal.color;
-  ctx.shadowBlur = 6;
+  ctx.shadowBlur = crystal.type === "bad" ? 10 : 6;
   ctx.fillRect(-CRYSTAL_SIZE / 2, -CRYSTAL_SIZE / 2, CRYSTAL_SIZE, CRYSTAL_SIZE);
   ctx.restore();
 }
@@ -90,7 +90,7 @@ function checkCollision(crystal, playerX, canvasW) {
   );
 }
 
-export default function CrystalRush({ onComplete, onSkip }) {
+export default function CrystalRush({ onComplete, onSkip, T, lm }) {
   const canvasRef = useRef(null);
   const stateRef = useRef({
     playerX: 200,
@@ -100,13 +100,20 @@ export default function CrystalRush({ onComplete, onSkip }) {
     lastTime: null,
     lastSpawn: 0,
     running: true,
-    popups: [], // { x, y, text, age }
+    popups: [],
     feverPulse: 0,
+    combo: 0,
+    redFlash: 0,
+    feverSoundPlayed: false,
   });
   const keysRef = useRef({ left: false, right: false });
   const rafRef = useRef(null);
+  const themeRef = useRef({ T, lm });
+  const audioCtxRef = useRef(null);
+  useEffect(() => { themeRef.current = { T, lm }; }, [T, lm]);
 
-  const canvasW = typeof window !== "undefined" && window.innerWidth < 480 ? CANVAS_W_MOBILE : CANVAS_W_DESKTOP;
+  const isMobile = typeof window !== "undefined" && window.innerWidth < 480;
+  const canvasW = isMobile ? CANVAS_W_MOBILE : CANVAS_W_DESKTOP;
 
   const [gameOver, setGameOver] = useState(false);
   const [finalScore, setFinalScore] = useState(0);
@@ -114,14 +121,87 @@ export default function CrystalRush({ onComplete, onSkip }) {
   const [newRecord, setNewRecord] = useState(false);
   const [paused, setPaused] = useState(false);
   const pausedRef = useRef(false);
+  const [confirmQuit, setConfirmQuit] = useState(false);
+  const confirmQuitRef = useRef(false);
+
+  // ── Audio helpers ──────────────────────────────────────────────────────────
+  function getAudioCtx() {
+    if (!audioCtxRef.current) audioCtxRef.current = new AudioContext();
+    if (audioCtxRef.current.state === "suspended") audioCtxRef.current.resume();
+    return audioCtxRef.current;
+  }
+
+  function playCollect(pts) {
+    try {
+      const ctx = getAudioCtx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      const freq = pts >= 5 ? 880 : pts >= 3 ? 660 : 440;
+      const dur = pts >= 5 ? 0.12 : pts >= 3 ? 0.10 : 0.08;
+      osc.frequency.setValueAtTime(freq, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(freq * 1.5, ctx.currentTime + dur);
+      gain.gain.setValueAtTime(0.15, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + dur);
+      osc.start(); osc.stop(ctx.currentTime + dur);
+    } catch {}
+  }
+
+  function playBadHit() {
+    try {
+      const ctx = getAudioCtx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.type = "sawtooth";
+      osc.frequency.setValueAtTime(120, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(60, ctx.currentTime + 0.1);
+      gain.gain.setValueAtTime(0.18, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.1);
+      osc.start(); osc.stop(ctx.currentTime + 0.1);
+    } catch {}
+  }
+
+  function playFeverStart() {
+    try {
+      const ctx = getAudioCtx();
+      [440, 550, 660, 880].forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.frequency.setValueAtTime(freq, ctx.currentTime + i * 0.08);
+        gain.gain.setValueAtTime(0.12, ctx.currentTime + i * 0.08);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.08 + 0.1);
+        osc.start(ctx.currentTime + i * 0.08);
+        osc.stop(ctx.currentTime + i * 0.08 + 0.1);
+      });
+    } catch {}
+  }
+
+  function playGameOver() {
+    try {
+      const ctx = getAudioCtx();
+      [440, 330, 220].forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.frequency.setValueAtTime(freq, ctx.currentTime + i * 0.15);
+        gain.gain.setValueAtTime(0.15, ctx.currentTime + i * 0.15);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.15 + 0.18);
+        osc.start(ctx.currentTime + i * 0.15);
+        osc.stop(ctx.currentTime + i * 0.15 + 0.18);
+      });
+    } catch {}
+  }
 
   const endGame = useCallback((score) => {
     stateRef.current.running = false;
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    const best = scoreToHighscore(score);
     if (score > highscore) { saveHighscore(score); setNewRecord(true); }
     setFinalScore(score);
     setGameOver(true);
+    playGameOver();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [highscore]);
 
   const resetGame = useCallback(() => {
@@ -135,6 +215,9 @@ export default function CrystalRush({ onComplete, onSkip }) {
       running: true,
       popups: [],
       feverPulse: 0,
+      combo: 0,
+      redFlash: 0,
+      feverSoundPlayed: false,
     };
     setGameOver(false);
     setFinalScore(0);
@@ -143,7 +226,7 @@ export default function CrystalRush({ onComplete, onSkip }) {
     pausedRef.current = false;
   }, [canvasW]);
 
-  // Game loop
+  // ── Game loop ──────────────────────────────────────────────────────────────
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -160,6 +243,8 @@ export default function CrystalRush({ onComplete, onSkip }) {
         return;
       }
 
+      const { T: th, lm: isLight } = themeRef.current;
+
       const dt = s.lastTime ? Math.min(ts - s.lastTime, 100) : 16;
       s.lastTime = ts;
       s.elapsed += dt / 1000;
@@ -173,78 +258,104 @@ export default function CrystalRush({ onComplete, onSkip }) {
       const timeLeft = GAME_DURATION - s.elapsed;
       const fever = timeLeft <= 10;
 
-      // Player movement (4px per 16ms frame, scale by dt)
+      // Fever sound — once
+      if (fever && !s.feverSoundPlayed) {
+        s.feverSoundPlayed = true;
+        playFeverStart();
+      }
+
       const spd = 4 * (dt / 16);
       if (keysRef.current.left)  s.playerX -= spd;
       if (keysRef.current.right) s.playerX += spd;
       s.playerX = Math.max(PLAYER_W / 2, Math.min(canvasW - PLAYER_W / 2, s.playerX));
 
-      // Spawn crystals
       if (ts - s.lastSpawn > phase.spawnMs) {
-        s.crystals.push(spawnCrystal(canvasW));
+        s.crystals.push(spawnCrystal(canvasW, isLight, s.elapsed));
         s.lastSpawn = ts;
       }
 
-      // Move crystals + collision
+      // Move + collision
       const hit = [];
       s.crystals = s.crystals.filter(c => {
         c.y += phase.speed * (dt / 16);
         if (checkCollision(c, s.playerX, canvasW)) {
-          const pts = fever ? c.pts * 2 : c.pts;
-          s.score += pts;
-          hit.push({ x: c.x, y: PLAYER_Y - 20, text: `+${pts}`, age: 0 });
+          if (c.type === "bad") {
+            s.score = Math.max(0, s.score - 3);
+            s.combo = 0;
+            s.redFlash = 8;
+            playBadHit();
+            hit.push({ x: c.x, y: PLAYER_Y - 20, text: "-3", age: 0, bad: true });
+          } else {
+            s.combo++;
+            const mult = getComboMultiplier(s.combo);
+            const pts = c.pts * mult * (fever ? 2 : 1);
+            s.score += pts;
+            playCollect(c.pts);
+            hit.push({ x: c.x, y: PLAYER_Y - 20, text: `+${pts}`, age: 0, bad: false });
+          }
           return false;
         }
-        return c.y < CANVAS_H + CRYSTAL_SIZE;
+        // Crystal fell off — reset combo only for good crystals
+        if (c.y >= CANVAS_H + CRYSTAL_SIZE) {
+          if (c.type !== "bad") s.combo = 0;
+          return false;
+        }
+        return true;
       });
       s.popups.push(...hit);
       s.popups = s.popups.filter(p => { p.age += dt; return p.age < 700; });
 
-      // Fever pulse
       s.feverPulse = fever ? (s.feverPulse + dt * 0.004) % (Math.PI * 2) : 0;
 
-      // ── Draw ────────────────────────────────────────────────────────
+      // ── Draw ──────────────────────────────────────────────────────────────
       // Background
       if (fever) {
         const pulse = 0.5 + 0.5 * Math.sin(s.feverPulse);
-        const r = Math.round(14 + pulse * 12);
-        const g = Math.round(12 + pulse * 2);
-        ctx.fillStyle = `rgb(${r},${g},9)`;
+        if (isLight) {
+          ctx.fillStyle = `rgb(${Math.round(245 - pulse * 30)},${Math.round(220 - pulse * 40)},${Math.round(200 - pulse * 60)})`;
+        } else {
+          ctx.fillStyle = `rgb(${Math.round(14 + pulse * 12)},${Math.round(12 + pulse * 2)},9)`;
+        }
       } else {
-        ctx.fillStyle = "#0e0c09";
+        ctx.fillStyle = th.card;
       }
       ctx.fillRect(0, 0, canvasW, CANVAS_H);
 
       // Ground line
-      ctx.strokeStyle = "#2a2520";
+      ctx.strokeStyle = th.border;
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(0, PLAYER_Y + PLAYER_H / 2 + 4);
       ctx.lineTo(canvasW, PLAYER_Y + PLAYER_H / 2 + 4);
       ctx.stroke();
 
-      // Crystals
       s.crystals.forEach(c => drawCrystal(ctx, c));
+      drawPlayer(ctx, s.playerX, canvasW, th.accent);
 
-      // Player
-      drawPlayer(ctx, s.playerX, canvasW);
-
-      // Score popup text
+      // Score popups
       ctx.font = "bold 14px monospace";
       s.popups.forEach(p => {
-        const alpha = 1 - p.age / 700;
-        ctx.globalAlpha = alpha;
-        ctx.fillStyle = "#fbbf24";
+        ctx.globalAlpha = 1 - p.age / 700;
+        ctx.fillStyle = p.bad ? "#ef4444" : "#f59e0b";
         ctx.fillText(p.text, p.x - 8, p.y - (p.age / 700) * 30);
       });
       ctx.globalAlpha = 1;
 
-      // HUD — timer bar
+      // Timer bar
       const pct = s.elapsed / GAME_DURATION;
-      ctx.fillStyle = "#1a1714";
+      ctx.fillStyle = th.inputBg;
       ctx.fillRect(0, 0, canvasW, 6);
-      ctx.fillStyle = fever ? "#f97316" : "#e07b39";
+      ctx.fillStyle = fever ? "#f97316" : th.accent;
       ctx.fillRect(0, 0, canvasW * (1 - pct), 6);
+
+      // Combo text
+      if (s.combo >= 3) {
+        const mult = getComboMultiplier(s.combo);
+        ctx.font = "bold 11px monospace";
+        ctx.fillStyle = mult >= 3 ? "#f97316" : "#fbbf24";
+        ctx.globalAlpha = 1;
+        ctx.fillText(`×${mult} COMBO`, 8, 20);
+      }
 
       // FEVER text
       if (fever) {
@@ -254,17 +365,50 @@ export default function CrystalRush({ onComplete, onSkip }) {
         ctx.fillText("🔥 FEVER!", canvasW / 2 - 36, 24);
         ctx.globalAlpha = 1;
       }
+
+      // Red flash on bad hit
+      if (s.redFlash > 0) {
+        ctx.fillStyle = `rgba(239,68,68,${(s.redFlash / 8) * 0.35})`;
+        ctx.fillRect(0, 0, canvasW, CANVAS_H);
+        s.redFlash--;
+      }
     };
 
     rafRef.current = requestAnimationFrame(loop);
-    return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      audioCtxRef.current?.close();
+    };
   }, [canvasW, endGame]);
 
-  // Keyboard
+  // ── Keyboard ───────────────────────────────────────────────────────────────
   useEffect(() => {
     const onDown = (e) => {
       if (e.key === "ArrowLeft"  || e.key === "a" || e.key === "A") keysRef.current.left  = true;
       if (e.key === "ArrowRight" || e.key === "d" || e.key === "D") keysRef.current.right = true;
+      if (e.key === " ") {
+        e.preventDefault();
+        if (!confirmQuitRef.current) {
+          pausedRef.current = !pausedRef.current;
+          setPaused(p => !p);
+        }
+      }
+      if (e.key === "Escape") {
+        if (confirmQuitRef.current) {
+          confirmQuitRef.current = false;
+          setConfirmQuit(false);
+          pausedRef.current = false;
+          setPaused(false);
+        } else {
+          confirmQuitRef.current = true;
+          setConfirmQuit(true);
+          pausedRef.current = true;
+          setPaused(true);
+        }
+      }
+      if (e.key === "Enter" && confirmQuitRef.current) {
+        onSkip();
+      }
     };
     const onUp = (e) => {
       if (e.key === "ArrowLeft"  || e.key === "a" || e.key === "A") keysRef.current.left  = false;
@@ -273,19 +417,18 @@ export default function CrystalRush({ onComplete, onSkip }) {
     window.addEventListener("keydown", onDown);
     window.addEventListener("keyup",   onUp);
     return () => { window.removeEventListener("keydown", onDown); window.removeEventListener("keyup", onUp); };
-  }, []);
+  }, [onSkip]);
 
-  // Pause on tab hide
+  // ── Pause on tab hide ──────────────────────────────────────────────────────
   useEffect(() => {
     const handler = () => { pausedRef.current = document.hidden; setPaused(document.hidden); };
     document.addEventListener("visibilitychange", handler);
     return () => document.removeEventListener("visibilitychange", handler);
   }, []);
 
-  const crystalsEarned = scoreToCrystals(finalScore);
   const isNewRecord = newRecord && finalScore > 0;
 
-  // Live HUD values read from ref each render (score updates via canvas, not state)
+  // Live HUD
   const [hudScore, setHudScore] = useState(0);
   const [hudTimeLeft, setHudTimeLeft] = useState(GAME_DURATION);
   useEffect(() => {
@@ -301,21 +444,26 @@ export default function CrystalRush({ onComplete, onSkip }) {
   const mm = String(Math.floor(hudTimeLeft / 60)).padStart(2, "0");
   const ss = String(hudTimeLeft % 60).padStart(2, "0");
 
+  const btnBase = {
+    background: "none", border: "none", cursor: "pointer",
+    fontFamily: "inherit", padding: "2px 6px",
+  };
+
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 0,
       fontFamily: "'DM Sans', monospace", userSelect: "none" }}>
 
       {/* HUD bar */}
       <div style={{ width: canvasW, display: "flex", justifyContent: "space-between",
-        alignItems: "center", padding: "6px 10px", background: "#0e0c09",
-        borderRadius: "12px 12px 0 0", borderBottom: "1px solid #2a2520" }}>
-        <span style={{ fontSize: 13, color: "#888", letterSpacing: "0.08em" }}>
+        alignItems: "center", padding: "6px 10px", background: T.card,
+        borderRadius: "12px 12px 0 0", borderBottom: `1px solid ${T.border}` }}>
+        <span style={{ fontSize: 13, color: T.textMid, letterSpacing: "0.08em" }}>
           {mm}:{ss}
         </span>
-        <span style={{ fontSize: 14, fontWeight: 700, color: hudTimeLeft <= 10 ? "#f97316" : "#e07b39" }}>
+        <span style={{ fontSize: 14, fontWeight: 700, color: hudTimeLeft <= 10 ? "#f97316" : T.accent }}>
           {hudScore} Pkt
         </span>
-        <span style={{ fontSize: 11, color: "#444" }}>
+        <span style={{ fontSize: 11, color: T.textDim }}>
           Best {highscore}
         </span>
       </div>
@@ -323,62 +471,76 @@ export default function CrystalRush({ onComplete, onSkip }) {
       {/* Canvas */}
       <div style={{ position: "relative" }}>
         <canvas ref={canvasRef} width={canvasW} height={CANVAS_H}
-          style={{ display: "block", borderRadius: gameOver ? 0 : "0 0 12px 12px" }} />
+          style={{ display: "block", borderRadius: gameOver ? 0 : "0 0 0 0" }} />
+
+        {/* Confirm quit overlay */}
+        {confirmQuit && !gameOver && (
+          <div style={{ position: "absolute", inset: 0,
+            background: lm ? "rgba(245,240,234,0.92)" : "rgba(0,0,0,0.88)",
+            display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12 }}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: T.text }}>Spiel beenden?</div>
+            <div style={{ fontSize: 11, color: T.textMid }}>Enter = Ja &nbsp;·&nbsp; Esc = Nein</div>
+            <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+              <button onClick={onSkip}
+                style={{ padding: "7px 18px", borderRadius: 8, border: "none",
+                  background: T.accent, color: "#fff", fontSize: 12, fontWeight: 700,
+                  cursor: "pointer", fontFamily: "inherit" }}>
+                Beenden
+              </button>
+              <button onClick={() => { confirmQuitRef.current = false; setConfirmQuit(false); pausedRef.current = false; setPaused(false); }}
+                style={{ padding: "7px 14px", borderRadius: 8, border: `1px solid ${T.border}`,
+                  background: T.inputBg, color: T.textMid, fontSize: 12,
+                  cursor: "pointer", fontFamily: "inherit" }}>
+                Weiter
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Pause overlay */}
-        {paused && !gameOver && (
-          <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.7)",
+        {paused && !confirmQuit && !gameOver && (
+          <div style={{ position: "absolute", inset: 0,
+            background: lm ? "rgba(245,240,234,0.75)" : "rgba(0,0,0,0.7)",
             display: "flex", alignItems: "center", justifyContent: "center",
-            fontSize: 18, fontWeight: 700, color: "#e07b39", letterSpacing: "0.1em" }}>
+            fontSize: 18, fontWeight: 700, color: T.accent, letterSpacing: "0.1em" }}>
             PAUSIERT
           </div>
         )}
 
         {/* Game Over overlay */}
         {gameOver && (
-          <div style={{ position: "absolute", inset: 0, background: "rgba(14,12,9,0.96)",
+          <div style={{ position: "absolute", inset: 0,
+            background: lm ? "rgba(237,232,224,0.97)" : "rgba(14,12,9,0.96)",
             display: "flex", flexDirection: "column", alignItems: "center",
-            justifyContent: "center", gap: 10, borderRadius: "0 0 12px 12px" }}>
-            <div style={{ fontSize: 13, color: "#666", letterSpacing: "0.14em", textTransform: "uppercase" }}>
+            justifyContent: "center", gap: 10 }}>
+            <div style={{ fontSize: 13, color: T.textMid, letterSpacing: "0.14em", textTransform: "uppercase" }}>
               Game Over
             </div>
-            <div style={{ fontSize: 36, fontWeight: 800, color: "#e07b39", lineHeight: 1 }}>
+            <div style={{ fontSize: 36, fontWeight: 800, color: T.accent, lineHeight: 1 }}>
               {finalScore}
             </div>
-            <div style={{ fontSize: 12, color: "#888" }}>Punkte</div>
+            <div style={{ fontSize: 12, color: T.textMid }}>Punkte</div>
 
             {isNewRecord && (
-              <div style={{ fontSize: 13, color: "#fbbf24", fontWeight: 700 }}>
+              <div style={{ fontSize: 13, color: "#f59e0b", fontWeight: 700 }}>
                 🎉 Neuer Rekord!
               </div>
             )}
 
-            <div style={{ display: "flex", gap: 14, marginTop: 4 }}>
-              <div style={{ textAlign: "center" }}>
-                <div style={{ fontSize: 18, fontWeight: 700, color: "#a78bfa" }}>◆ {crystalsEarned}</div>
-                <div style={{ fontSize: 10, color: "#555" }}>Kristalle</div>
-              </div>
-              <div style={{ width: 1, background: "#222" }} />
-              <div style={{ textAlign: "center" }}>
-                <div style={{ fontSize: 18, fontWeight: 700, color: "#888" }}>
-                  {isNewRecord ? finalScore : Math.max(highscore, finalScore)}
-                </div>
-                <div style={{ fontSize: 10, color: "#555" }}>Bestzeit</div>
-              </div>
+            <div style={{ fontSize: 13, color: T.textMid }}>
+              Rekord: {Math.max(highscore, finalScore)} Pkt
             </div>
 
             <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-              <button
-                onClick={() => { resetGame(); }}
-                style={{ padding: "8px 18px", borderRadius: 8, border: "1px solid #333",
-                  background: "#1a1714", color: "#aaa", fontSize: 13, cursor: "pointer",
+              <button onClick={() => { resetGame(); }}
+                style={{ padding: "8px 18px", borderRadius: 8, border: `1px solid ${T.border}`,
+                  background: T.inputBg, color: T.textMid, fontSize: 13, cursor: "pointer",
                   fontFamily: "inherit" }}>
                 Nochmal!
               </button>
-              <button
-                onClick={() => onComplete(finalScore, crystalsEarned)}
+              <button onClick={() => onComplete()}
                 style={{ padding: "8px 20px", borderRadius: 8, border: "none",
-                  background: "#e07b39", color: "#0e0c09", fontSize: 13, fontWeight: 700,
+                  background: T.accent, color: "#fff", fontSize: 13, fontWeight: 700,
                   cursor: "pointer", fontFamily: "inherit" }}>
                 Fertig
               </button>
@@ -387,21 +549,41 @@ export default function CrystalRush({ onComplete, onSkip }) {
         )}
       </div>
 
+      {/* Mobile touch controls */}
+      {isMobile && !gameOver && (
+        <div style={{ width: canvasW, display: "flex", gap: 2 }}>
+          <button
+            onPointerDown={() => keysRef.current.left = true}
+            onPointerUp={() => keysRef.current.left = false}
+            onPointerLeave={() => keysRef.current.left = false}
+            style={{ flex: 1, height: 52, fontSize: 22, background: T.inputBg,
+              border: `1px solid ${T.border}`, borderTop: "none", cursor: "pointer",
+              color: T.textMid, fontFamily: "inherit" }}>
+            ←
+          </button>
+          <button
+            onPointerDown={() => keysRef.current.right = true}
+            onPointerUp={() => keysRef.current.right = false}
+            onPointerLeave={() => keysRef.current.right = false}
+            style={{ flex: 1, height: 52, fontSize: 22, background: T.inputBg,
+              border: `1px solid ${T.border}`, borderTop: "none", cursor: "pointer",
+              color: T.textMid, fontFamily: "inherit" }}>
+            →
+          </button>
+        </div>
+      )}
+
       {/* Bottom bar */}
       <div style={{ width: canvasW, display: "flex", justifyContent: "space-between",
-        alignItems: "center", padding: "5px 10px", background: "#0a0908",
-        borderRadius: "0 0 12px 12px", borderTop: "1px solid #1a1714" }}>
-        <span style={{ fontSize: 10, color: "#444" }}>← → bewegen</span>
+        alignItems: "center", padding: "5px 10px", background: T.bg,
+        borderRadius: "0 0 12px 12px", borderTop: `1px solid ${T.border}` }}>
+        <span style={{ fontSize: 10, color: T.textDim }}>← → bewegen</span>
         <button
           onClick={() => { pausedRef.current = !pausedRef.current; setPaused(p => !p); }}
-          style={{ fontSize: 10, color: "#555", background: "none", border: "none",
-            cursor: "pointer", padding: "2px 6px", fontFamily: "inherit" }}>
+          style={{ ...btnBase, fontSize: 10, color: T.textMid }}>
           {paused ? "▶ Weiter" : "⏸ Pause"}
         </button>
-        <button
-          onClick={onSkip}
-          style={{ fontSize: 10, color: "#444", background: "none", border: "none",
-            cursor: "pointer", padding: "2px 6px", fontFamily: "inherit" }}>
+        <button onClick={onSkip} style={{ ...btnBase, fontSize: 10, color: T.textDim }}>
           Beenden ✕
         </button>
       </div>
