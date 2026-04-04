@@ -153,6 +153,15 @@ export default function Breakout({ onComplete, onSkip, T, lm }) {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
+
+    // HiDPI / Retina sharpness
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width  = canvasW * dpr;
+    canvas.height = CANVAS_H * dpr;
+    canvas.style.width  = canvasW + "px";
+    canvas.style.height = CANVAS_H + "px";
+    ctx.scale(dpr, dpr);
+
     const s = stateRef.current;
 
     const loop = (ts) => {
@@ -375,8 +384,8 @@ export default function Breakout({ onComplete, onSkip, T, lm }) {
 
       {/* Canvas */}
       <div style={{ position: "relative" }}>
-        <canvas ref={canvasRef} width={canvasW} height={CANVAS_H}
-          style={{ display: "block", cursor: "none" }} />
+        <canvas ref={canvasRef}
+          style={{ display: "block", cursor: "none", width: canvasW, height: CANVAS_H }} />
 
         {/* Confirm quit */}
         {confirmQuit && !gameOver && (
