@@ -59,9 +59,11 @@ export default function Breakout({ onComplete, onSkip, T, lm }) {
   useEffect(() => { themeRef.current = { T, lm }; }, [T, lm]);
 
   const [gameOver, setGameOver] = useState(false);
+  const [won, setWon] = useState(false);
   const [finalScore, setFinalScore] = useState(0);
   const [highscore] = useState(loadHighscore);
   const [newRecord, setNewRecord] = useState(false);
+  const savedBricksRef = useRef(null);
   const [lives, setLives] = useState(3);
   const [paused, setPaused] = useState(false);
   const pausedRef = useRef(false);
@@ -111,11 +113,11 @@ export default function Breakout({ onComplete, onSkip, T, lm }) {
     } catch {}
   }
 
-  function initState() {
+  function initState(bricks) {
     return {
       paddleX: canvasW / 2,
       ball: { x: canvasW / 2, y: PADDLE_Y - BALL_R - 2, vx: 2, vy: -2.2 },
-      bricks: makeBricks(cols, rows, canvasW, brickW, brickH, brickGap),
+      bricks: bricks || makeBricks(cols, rows, canvasW, brickW, brickH, brickGap),
       score: 0,
       lives: 3,
       elapsed: 0,
@@ -125,31 +127,34 @@ export default function Breakout({ onComplete, onSkip, T, lm }) {
     };
   }
 
-  const endGame = useCallback((score, rec) => {
+  const endGame = useCallback((score, didWin) => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     stateRef.current.running = false;
-    if (score > highscore) { saveHighscore(score); rec && setNewRecord(true); }
+    if (score > highscore) { saveHighscore(score); setNewRecord(true); }
     setFinalScore(score);
+    setWon(didWin);
+    // Save the brick layout so "Nochmal" can reuse it on fail
+    savedBricksRef.current = stateRef.current.bricks.map(b => ({ ...b, alive: true }));
     setGameOver(true);
     playLose();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [highscore]);
 
-  const resetGame = useCallback(() => {
-    // Cancel current loop — the useEffect cleanup will handle RAF cancellation
+  const resetGame = useCallback((keepLevel) => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    // Close AudioContext so the next effect gets a fresh one
     audioCtxRef.current?.close();
     audioCtxRef.current = null;
-    setGameOver(false); setFinalScore(0); setNewRecord(false);
+    // On fail: reuse same bricks; on win: generate new layout
+    if (!keepLevel) savedBricksRef.current = null;
+    setGameOver(false); setWon(false); setFinalScore(0); setNewRecord(false);
     setLives(3); setPaused(false); pausedRef.current = false;
     confirmQuitRef.current = false; setConfirmQuit(false);
-    setGameKey(k => k + 1); // re-triggers the game loop useEffect
+    setGameKey(k => k + 1);
   }, []);
 
   // Game loop
   useEffect(() => {
-    stateRef.current = initState();
+    stateRef.current = initState(savedBricksRef.current);
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
@@ -417,15 +422,19 @@ export default function Breakout({ onComplete, onSkip, T, lm }) {
           <div style={{ position: "absolute", inset: 0,
             background: lm ? "rgba(237,232,224,0.97)" : "rgba(14,12,9,0.96)",
             display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10 }}>
-            <div style={{ fontSize: 13, color: T.textMid, letterSpacing: "0.14em", textTransform: "uppercase" }}>Game Over</div>
+            <div style={{ fontSize: 13, color: T.textMid, letterSpacing: "0.14em", textTransform: "uppercase" }}>
+              {won ? "🎉 Geschafft!" : "Game Over"}
+            </div>
             <div style={{ fontSize: 38, fontWeight: 800, color: T.accent, lineHeight: 1 }}>{finalScore}</div>
             <div style={{ fontSize: 12, color: T.textMid }}>Punkte</div>
-            {newRecord && <div style={{ fontSize: 13, color: "#f59e0b", fontWeight: 700 }}>🎉 Neuer Rekord!</div>}
+            {newRecord && <div style={{ fontSize: 13, color: "#f59e0b", fontWeight: 700 }}>Neuer Rekord!</div>}
             <div style={{ fontSize: 13, color: T.textMid }}>Rekord: {Math.max(highscore, finalScore)} Pkt</div>
             <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-              <button onClick={resetGame} style={{ padding: "8px 18px", borderRadius: 8,
+              <button onClick={() => resetGame(!won)} style={{ padding: "8px 18px", borderRadius: 8,
                 border: `1px solid ${T.border}`, background: T.inputBg, color: T.textMid,
-                fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Nochmal!</button>
+                fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>
+                {won ? "Nächstes Level" : "Nochmal"}
+              </button>
               <button onClick={onComplete} style={{ padding: "8px 20px", borderRadius: 8,
                 border: "none", background: T.accent, color: "#fff",
                 fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Fertig</button>

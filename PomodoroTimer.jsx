@@ -473,8 +473,7 @@ export default function PomodoroTimer() {
   const completeSession = useCallback(() => {
     clearInterval(intervalRef.current);
     setIsRunning(false);
-    // Close any active game or invitation when a session ends
-    setActiveGame(null); activeGameRef.current = null;
+    // Close invitation but keep active game running — player may finish it
     setShowPauseInvitation(false);
     playChime();
     setFlash(true);
@@ -627,8 +626,7 @@ export default function PomodoroTimer() {
   const handleGameComplete = useCallback(() => {
     setActiveGame(null); activeGameRef.current = null;
     const inBreak = modeRef.current === "shortBreak" || modeRef.current === "longBreak";
-    if (inBreak && isRunningRef.current && timeLeft > 90)
-      setTimeout(() => setShowPauseInvitation(true), 2000);
+    if (inBreak && isRunningRef.current && timeLeft > 90) setShowPauseInvitation(true);
   }, [timeLeft]);
 
   const handleGameSkip = useCallback(() => {
@@ -1125,6 +1123,18 @@ export default function PomodoroTimer() {
             onSkip={() => setShowPauseInvitation(false)}
             T={T}
           />
+        )}
+
+        {/* Reopen game menu button — shown when banner was dismissed */}
+        {(mode === "shortBreak" || mode === "longBreak") && isRunning && !showPauseInvitation && !activeGame && (
+          <button
+            onClick={() => setShowPauseInvitation(true)}
+            style={{ marginTop: 8, padding: "7px 18px", borderRadius: 20,
+              border: `1px solid ${T.border}`, background: T.inputBg,
+              color: T.textMid, fontSize: 12, cursor: "pointer",
+              fontFamily: "'DM Sans', sans-serif" }}>
+            🎮 Minispiel
+          </button>
         )}
 
         {/* Session progress + stats */}
