@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { loadGameHighscore, saveGameHighscore } from "../storage.js";
 
 const GRID_SIZE = 8;
@@ -31,6 +31,17 @@ const getShapeSize = (cells) => ({
   w: Math.max(...cells.map(([x]) => x)) + 1,
   h: Math.max(...cells.map(([, y]) => y)) + 1,
 });
+
+const getDefaultAnchorCell = (piece) => {
+  if (!piece?.cells?.length) return [0, 0];
+  const centerX = piece.cells.reduce((sum, [x]) => sum + x, 0) / piece.cells.length;
+  const centerY = piece.cells.reduce((sum, [, y]) => sum + y, 0) / piece.cells.length;
+  return piece.cells.reduce((best, cell) => {
+    const bestDist = Math.hypot(best[0] - centerX, best[1] - centerY);
+    const cellDist = Math.hypot(cell[0] - centerX, cell[1] - centerY);
+    return cellDist < bestDist ? cell : best;
+  }, piece.cells[0]);
+};
 
 function createPiece(id) {
   const cells = SHAPES[Math.floor(Math.random() * SHAPES.length)];
@@ -95,6 +106,7 @@ export default function BlockGrid({ onComplete, onSkip, T, lm }) {
   const isMobile = typeof window !== "undefined" && window.innerWidth < 480;
   const cellSize = isMobile ? 28 : 34;
   const boardSize = GRID_SIZE * cellSize + (GRID_SIZE - 1) * 4;
+  const boardRef = useRef(null);
 
   const [board, setBoard] = useState(createEmptyBoard);
   const [pieces, setPieces] = useState(() => createOfferSet("start"));
@@ -107,8 +119,10 @@ export default function BlockGrid({ onComplete, onSkip, T, lm }) {
   const [newRecord, setNewRecord] = useState(false);
   const [pulseCells, setPulseCells] = useState([]);
   const [hoveredCell, setHoveredCell] = useState(null);
+  const [dragState, setDragState] = useState(null);
 
   const selectedPiece = pieces.find((piece) => piece.id === selectedPieceId) || null;
+  const activeAnchorCell = dragState?.anchorCell || getDefaultAnchorCell(selectedPiece);
 
   useEffect(() => {
     if (selectedPieceId && !pieces.some((piece) => piece.id === selectedPieceId)) {
@@ -155,25 +169,39 @@ export default function BlockGrid({ onComplete, onSkip, T, lm }) {
 
   const previewPlacement = useMemo(() => {
     if (!selectedPiece || !hoveredCell) return { cells: [], valid: false };
+    const originX = hoveredCell.x - activeAnchorCell[0];
+    const originY = hoveredCell.y - activeAnchorCell[1];
     const cells = selectedPiece.cells.map(([dx, dy]) => ({
-      x: hoveredCell.x + dx,
-      y: hoveredCell.y + dy,
-      key: `${hoveredCell.x + dx}-${hoveredCell.y + dy}`,
+      x: originX + dx,
+      y: originY + dy,
+      key: `${originX + dx}-${originY + dy}`,
     }));
     return {
       cells,
-      valid: canPlace(board, selectedPiece, hoveredCell.x, hoveredCell.y),
+      valid: canPlace(board, selectedPiece, originX, originY),
     };
-  }, [board, hoveredCell, selectedPiece]);
+  }, [activeAnchorCell, board, hoveredCell, selectedPiece]);
 
-  const handlePlace = (x, y) => {
-    if (!selectedPiece || gameOver) return;
-    if (!canPlace(board, selectedPiece, x, y)) return;
+  const getBoardCellFromPoint = useCallback((clientX, clientY) => {
+    const rect = boardRef.current?.getBoundingClientRect();
+    if (!rect) return null;
+    if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) return null;
 
-    const placedCells = selectedPiece.cells.map(([dx, dy]) => `${x + dx}-${y + dy}`);
-    const result = placePiece(board, selectedPiece, x, y);
+    const x = Math.floor((clientX - rect.left) / (cellSize + 4));
+    const y = Math.floor((clientY - rect.top) / (cellSize + 4));
+    if (x < 0 || x >= GRID_SIZE || y < 0 || y >= GRID_SIZE) return null;
+    return { x, y };
+  }, [cellSize]);
+
+  const handlePlace = useCallback((x, y, pieceOverride = null) => {
+    const pieceToPlace = pieceOverride || selectedPiece;
+    if (!pieceToPlace || gameOver) return;
+    if (!canPlace(board, pieceToPlace, x, y)) return;
+
+    const placedCells = pieceToPlace.cells.map(([dx, dy]) => `${x + dx}-${y + dy}`);
+    const result = placePiece(board, pieceToPlace, x, y);
     const nextCombo = result.clearedLines > 0 ? combo + 1 : 0;
-    const gain = selectedPiece.cells.length * 10 + result.clearedLines * 40 + nextCombo * 15;
+    const gain = pieceToPlace.cells.length * 10 + result.clearedLines * 40 + nextCombo * 15;
     const nextScore = score + gain;
 
     setBoard(result.board);
@@ -187,7 +215,7 @@ export default function BlockGrid({ onComplete, onSkip, T, lm }) {
       setNewRecord(true);
     }
 
-    const nextPieces = pieces.map((piece) => (piece.id === selectedPiece.id ? null : piece)).filter(Boolean);
+    const nextPieces = pieces.map((piece) => (piece.id === pieceToPlace.id ? null : piece)).filter(Boolean);
     if (nextPieces.length === 0) {
       setPieces(createOfferSet(`set-${nextScore}`));
       setSelectedPieceId(null);
@@ -196,7 +224,46 @@ export default function BlockGrid({ onComplete, onSkip, T, lm }) {
       setSelectedPieceId(nextPieces[0]?.id ?? null);
     }
     setHoveredCell(null);
-  };
+  }, [board, combo, gameOver, highscore, pieces, score, selectedPiece]);
+
+  const handleBoardInteract = useCallback((x, y) => {
+    if (!selectedPiece) return;
+    const originX = x - activeAnchorCell[0];
+    const originY = y - activeAnchorCell[1];
+    handlePlace(originX, originY);
+  }, [activeAnchorCell, handlePlace, selectedPiece]);
+
+  useEffect(() => {
+    if (!dragState) return;
+
+    const handlePointerMove = (e) => {
+      const point = { x: e.clientX, y: e.clientY };
+      setDragState((current) => current ? { ...current, pointerX: point.x, pointerY: point.y } : current);
+      setHoveredCell(getBoardCellFromPoint(point.x, point.y));
+    };
+
+    const handlePointerUp = (e) => {
+      const targetCell = getBoardCellFromPoint(e.clientX, e.clientY);
+      const draggedPiece = pieces.find((piece) => piece.id === dragState.pieceId);
+      if (targetCell && draggedPiece) {
+        setSelectedPieceId(draggedPiece.id);
+        const originX = targetCell.x - dragState.anchorCell[0];
+        const originY = targetCell.y - dragState.anchorCell[1];
+        if (canPlace(board, draggedPiece, originX, originY)) {
+          handlePlace(originX, originY, draggedPiece);
+        }
+      }
+      setDragState(null);
+      setHoveredCell(null);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, [board, dragState, getBoardCellFromPoint, handlePlace, pieces]);
 
   const restart = () => {
     setBoard(createEmptyBoard());
@@ -209,6 +276,7 @@ export default function BlockGrid({ onComplete, onSkip, T, lm }) {
     setNewRecord(false);
     setPulseCells([]);
     setHoveredCell(null);
+    setDragState(null);
   };
 
   return (
@@ -223,7 +291,10 @@ export default function BlockGrid({ onComplete, onSkip, T, lm }) {
         onMouseLeave={() => setHoveredCell(null)}
         style={{ position: "relative", background: lm ? "#ddd8cf" : "#131313", padding: 10, borderRadius: 18, border: `1px solid ${T.border}` }}
       >
-        <div style={{ display: "grid", gridTemplateColumns: `repeat(${GRID_SIZE}, ${cellSize}px)`, gap: 4 }}>
+        <div
+          ref={boardRef}
+          style={{ display: "grid", gridTemplateColumns: `repeat(${GRID_SIZE}, ${cellSize}px)`, gap: 4, touchAction: "none" }}
+        >
           {boardCells.map(({ x, y, value }) => {
             const active = pulseCells.includes(`${x}-${y}`);
             const previewCell = previewPlacement.cells.find((cell) => cell.key === `${x}-${y}`);
@@ -236,7 +307,7 @@ export default function BlockGrid({ onComplete, onSkip, T, lm }) {
             return (
               <button
                 key={`${x}-${y}`}
-                onClick={() => handlePlace(x, y)}
+                onClick={() => handleBoardInteract(x, y)}
                 onMouseEnter={() => setHoveredCell({ x, y })}
                 onFocus={() => setHoveredCell({ x, y })}
                 style={{
@@ -282,6 +353,22 @@ export default function BlockGrid({ onComplete, onSkip, T, lm }) {
             <button
               key={piece.id}
               onClick={() => setSelectedPieceId(piece.id)}
+              onPointerDown={(e) => {
+                if (gameOver) return;
+                const anchorCell = getDefaultAnchorCell(piece);
+                const ghostGap = 4;
+                const anchorOffsetX = anchorCell[0] * (cellSize + ghostGap) + cellSize / 2;
+                const anchorOffsetY = anchorCell[1] * (cellSize + ghostGap) + cellSize / 2;
+                setSelectedPieceId(piece.id);
+                setDragState({
+                  pieceId: piece.id,
+                  anchorCell,
+                  pointerX: e.clientX,
+                  pointerY: e.clientY,
+                  offsetX: anchorOffsetX,
+                  offsetY: anchorOffsetY,
+                });
+              }}
               style={{
                 minHeight: 92,
                 borderRadius: 12,
@@ -292,6 +379,7 @@ export default function BlockGrid({ onComplete, onSkip, T, lm }) {
                 alignItems: "center",
                 justifyContent: "center",
                 padding: 8,
+                touchAction: "none",
               }}
             >
               <div
@@ -336,6 +424,54 @@ export default function BlockGrid({ onComplete, onSkip, T, lm }) {
           Beenden x
         </button>
       </div>
+
+      {dragState && selectedPiece && (
+        <div
+          style={{
+            position: "fixed",
+            left: dragState.pointerX - dragState.offsetX,
+            top: dragState.pointerY - dragState.offsetY,
+            pointerEvents: "none",
+            zIndex: 200,
+            opacity: previewPlacement.valid ? 0.96 : 0.82,
+          }}
+        >
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: `repeat(${getShapeSize(selectedPiece.cells).w}, ${cellSize}px)`,
+              gridTemplateRows: `repeat(${getShapeSize(selectedPiece.cells).h}, ${cellSize}px)`,
+              gap: 4,
+            }}
+          >
+            {Array.from({ length: getShapeSize(selectedPiece.cells).w * getShapeSize(selectedPiece.cells).h }, (_, index) => {
+              const x = index % getShapeSize(selectedPiece.cells).w;
+              const y = Math.floor(index / getShapeSize(selectedPiece.cells).w);
+              const filled = selectedPiece.cells.some(([dx, dy]) => dx === x && dy === y);
+              return (
+                <div
+                  key={`drag-${selectedPiece.id}-${x}-${y}`}
+                  style={{
+                    width: cellSize,
+                    height: cellSize,
+                    borderRadius: 6,
+                    background: filled
+                      ? (previewPlacement.valid ? selectedPiece.color : "rgba(224,80,80,0.45)")
+                      : "transparent",
+                    border: filled
+                      ? `1px solid ${previewPlacement.valid ? selectedPiece.color : "#e05050"}`
+                      : "1px solid transparent",
+                    boxShadow: filled
+                      ? `0 8px 18px ${previewPlacement.valid ? `${selectedPiece.color}44` : "rgba(224,80,80,0.20)"}`
+                      : "none",
+                  }}
+                />
+              );
+            })}
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
