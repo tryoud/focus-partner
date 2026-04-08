@@ -8,6 +8,13 @@ export const TASKS_KEY        = "focus_tasks";
 export const TOTALS_KEY       = "focus_totals";
 export const SETTINGS_KEY     = "focus_settings";
 export const ACHIEVEMENTS_KEY = "focus_achievements";
+export const GAME_HIGHSCORE_KEYS = {
+  breakout: "focuspartner_hs_breakout",
+  blockgrid: "focuspartner_hs_blockgrid",
+  crystal: "focuspartner_hs_crystal",
+  memory: "focuspartner_hs_memory",
+  sudoku: "focuspartner_hs_sudoku",
+};
 
 export const DEFAULT_SETTINGS = {
   focus: 25, shortBreak: 5, longBreak: 15,

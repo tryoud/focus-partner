@@ -1,13 +1,12 @@
+import { loadGameHighscore } from "../storage.js";
+
 const GAMES = [
+  { id: "blockgrid", icon: "🧩", name: "Block Grid",    desc: "8x8 Blöcke legen" },
   { id: "crystal",  icon: "🔮", name: "Crystal Rush", desc: "Kristalle fangen" },
   { id: "memory",   icon: "🧠", name: "Memory Flash",  desc: "Sequenz merken"  },
   { id: "breakout", icon: "🏓", name: "Breakout",       desc: "Steine zerstören"},
   { id: "sudoku",   icon: "🔢", name: "Sudoku 6×6",    desc: "Zahlen einsetzen"},
 ];
-
-function loadHighscore(gameId) {
-  try { return parseInt(localStorage.getItem(`focuspartner_hs_${gameId}`) || "0"); } catch { return 0; }
-}
 
 export default function PauseInvitation({ pauseTimeLeft, onStartGame, onSkip, T }) {
   if (pauseTimeLeft < 30) return null;
@@ -34,7 +33,7 @@ export default function PauseInvitation({ pauseTimeLeft, onStartGame, onSkip, T 
         {/* 2×2 game card grid */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
           {GAMES.map(g => {
-            const hs = loadHighscore(g.id);
+            const hs = loadGameHighscore(g.id);
             return (
               <button key={g.id} className="game-card"
                 onClick={() => onStartGame(g.id)}

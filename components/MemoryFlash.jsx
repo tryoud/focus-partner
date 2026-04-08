@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { loadGameHighscore, saveGameHighscore } from "../storage.js";
 
 const TILE_COLORS = [
   "#e07b39","#a78bfa","#34d399",
@@ -6,10 +7,8 @@ const TILE_COLORS = [
   "#fb923c","#4ade80","#818cf8",
 ];
 const GRID = 3; // 3×3
-const HS_KEY = "focuspartner_hs_memory";
-
-function loadHighscore() { try { return parseInt(localStorage.getItem(HS_KEY)||"0"); } catch { return 0; } }
-function saveHighscore(v) { try { localStorage.setItem(HS_KEY, String(v)); } catch {} }
+function loadHighscore() { return loadGameHighscore("memory"); }
+function saveHighscore(v) { saveGameHighscore("memory", v); }
 
 export default function MemoryFlash({ onComplete, onSkip, T }) {
   // phase: "showing" | "input" | "success" | "fail" | "gameover"

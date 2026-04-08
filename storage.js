@@ -1,6 +1,6 @@
 import {
   STORAGE_KEY, WEEK_KEY, TASKS_KEY, TOTALS_KEY,
-  SETTINGS_KEY, ACHIEVEMENTS_KEY, DEFAULT_SETTINGS,
+  SETTINGS_KEY, ACHIEVEMENTS_KEY, DEFAULT_SETTINGS, GAME_HIGHSCORE_KEYS,
 } from "./constants.js";
 
 // ── Date helpers ─────────────────────────────────────────────────────────────
@@ -101,4 +101,33 @@ export function loadAchievements() {
 
 export function saveAchievements(arr) {
   try { localStorage.setItem(ACHIEVEMENTS_KEY, JSON.stringify(arr)); } catch {}
+}
+
+// ── Game highscores ──────────────────────────────────────────────────────────
+
+export function loadGameHighscore(gameId) {
+  const key = GAME_HIGHSCORE_KEYS[gameId];
+  if (!key) return 0;
+  try { return parseInt(localStorage.getItem(key) || "0", 10) || 0; } catch { return 0; }
+}
+
+export function saveGameHighscore(gameId, score) {
+  const key = GAME_HIGHSCORE_KEYS[gameId];
+  if (!key) return;
+  try { localStorage.setItem(key, String(score)); } catch {}
+}
+
+// ── Reset helpers ────────────────────────────────────────────────────────────
+
+export function resetProgressData() {
+  [
+    STORAGE_KEY,
+    WEEK_KEY,
+    TOTALS_KEY,
+    TASKS_KEY,
+    ACHIEVEMENTS_KEY,
+    ...Object.values(GAME_HIGHSCORE_KEYS),
+  ].forEach((key) => {
+    try { localStorage.removeItem(key); } catch {}
+  });
 }

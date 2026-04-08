@@ -4,7 +4,7 @@ import {
   loadSettings, saveSettings, loadDailyData, saveDailyData,
   loadWeekData, saveWeekData, loadTotals, saveTotals,
   loadTasks, saveTasks, loadAchievements, saveAchievements,
-  getDuration, localDateStr, todayStr, yesterdayStr,
+  getDuration, localDateStr, todayStr, yesterdayStr, resetProgressData,
 } from "./storage.js";
 import { SOUND_CREATORS } from "./audio/sounds.js";
 import DurationInput from "./components/DurationInput.jsx";
@@ -13,6 +13,7 @@ import CrystalRush from "./components/CrystalRush.jsx";
 import MemoryFlash from "./components/MemoryFlash.jsx";
 import Breakout from "./components/Breakout.jsx";
 import Sudoku from "./components/Sudoku.jsx";
+import BlockGrid from "./components/BlockGrid.jsx";
 import PauseInvitation from "./components/PauseInvitation.jsx";
 
 export default function PomodoroTimer() {
@@ -44,7 +45,7 @@ export default function PomodoroTimer() {
   const [ytVideoId, setYtVideoId] = useState(null);
   const [ytActivated, setYtActivated] = useState(false);
   const [showPauseInvitation, setShowPauseInvitation] = useState(false);
-  const [activeGame, setActiveGame] = useState(null); // null | "crystal" | "memory" | "breakout" | "sudoku"
+  const [activeGame, setActiveGame] = useState(null); // null | "blockgrid" | "crystal" | "memory" | "breakout" | "sudoku"
   const activeGameRef = useRef(null);
 
   const ytActivatedRef = useRef(false);
@@ -65,9 +66,11 @@ export default function PomodoroTimer() {
   const sessionsRef = useRef(breakCycleCount);
   const settingsRef = useRef(settings);
   const isRunningRef = useRef(isRunning);
+  const endTimeRef = useRef(null);
   const completedRef = useRef(false);
   const todaySessionsRef = useRef(todaySessions);
   const streakRef = useRef(streak);
+  const timeLeftRef = useRef(timeLeft);
 
   useEffect(() => { modeRef.current = mode; }, [mode]);
   useEffect(() => { sessionsRef.current = breakCycleCount; }, [breakCycleCount]);
@@ -75,6 +78,7 @@ export default function PomodoroTimer() {
   useEffect(() => { isRunningRef.current = isRunning; }, [isRunning]);
   useEffect(() => { todaySessionsRef.current = todaySessions; }, [todaySessions]);
   useEffect(() => { streakRef.current = streak; }, [streak]);
+  useEffect(() => { timeLeftRef.current = timeLeft; }, [timeLeft]);
 
   // Static styles + keyframes (injected once)
   useEffect(() => {
@@ -470,6 +474,13 @@ export default function PomodoroTimer() {
     try { new Notification(title, { body, silent: true }); } catch (_) {}
   };
 
+  const syncTimeLeftWithClock = useCallback(() => {
+    if (!endTimeRef.current) return;
+    const remainingMs = endTimeRef.current - Date.now();
+    const nextTimeLeft = Math.max(0, Math.ceil(remainingMs / 1000));
+    setTimeLeft(nextTimeLeft);
+  }, []);
+
   const completeSession = useCallback(() => {
     clearInterval(intervalRef.current);
     setIsRunning(false);
@@ -591,12 +602,31 @@ export default function PomodoroTimer() {
 
   // Timer interval
   useEffect(() => {
-    if (!isRunning) { clearInterval(intervalRef.current); return; }
-    intervalRef.current = setInterval(() => {
-      setTimeLeft(t => (t <= 0 ? 0 : t - 1));
-    }, 1000);
-    return () => clearInterval(intervalRef.current);
-  }, [isRunning]);
+    if (!isRunning) {
+      clearInterval(intervalRef.current);
+      if (endTimeRef.current) {
+        const remainingMs = endTimeRef.current - Date.now();
+        setTimeLeft(Math.max(0, Math.ceil(remainingMs / 1000)));
+        endTimeRef.current = null;
+      }
+      return;
+    }
+
+    endTimeRef.current = Date.now() + timeLeftRef.current * 1000;
+    syncTimeLeftWithClock();
+    intervalRef.current = setInterval(syncTimeLeftWithClock, 250);
+
+    const handleVisibilityChange = () => {
+      if (!document.hidden) syncTimeLeftWithClock();
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      clearInterval(intervalRef.current);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [isRunning, syncTimeLeftWithClock]);
 
   useEffect(() => {
     if (timeLeft === 0 && isRunning && !completedRef.current) {
@@ -1099,16 +1129,26 @@ export default function PomodoroTimer() {
 
         {/* Breathing animation during breaks */}
         {(mode === "shortBreak" || mode === "longBreak") && isRunning && (
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, minHeight: 62 }}>
             <div style={{
-              width: breathPhase === "inhale" ? 48 : 28,
-              height: breathPhase === "inhale" ? 48 : 28,
-              borderRadius: "50%",
-              background: `${T.accent}22`,
-              border: `1.5px solid ${T.accent}55`,
-              transition: "width 4s ease-in-out, height 4s ease-in-out",
-              boxShadow: breathPhase === "inhale" ? `0 0 16px ${T.accent}30` : "none",
-            }} />
+              width: 48,
+              height: 48,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}>
+              <div style={{
+                width: 48,
+                height: 48,
+                borderRadius: "50%",
+                background: `${T.accent}22`,
+                border: `1.5px solid ${T.accent}55`,
+                transform: breathPhase === "inhale" ? "scale(1)" : "scale(0.58)",
+                transformOrigin: "center",
+                transition: "transform 4s ease-in-out, box-shadow 0.4s ease-out",
+                boxShadow: breathPhase === "inhale" ? `0 0 16px ${T.accent}30` : "none",
+              }} />
+            </div>
             <span style={{ fontSize: 10, color: T.textDim2, letterSpacing: "0.12em", textTransform: "uppercase" }}>
               {breathPhase === "inhale" ? i18n.breathIn : i18n.breathOut}
             </span>
@@ -1748,11 +1788,12 @@ export default function PomodoroTimer() {
           <div style={{ background: T.tabBg, borderRadius: 10, overflow: "hidden", border: `1px solid ${T.border}` }}>
             <button onClick={() => {
               if (!window.confirm(de ? "Alle Statistiken zurücksetzen?" : "Reset all statistics?")) return;
-              localStorage.removeItem("pomodoro_data");
-              localStorage.removeItem("pomodoro_week");
-              localStorage.removeItem("focus_totals");
+              resetProgressData();
               setTodaySessions(0); setBreakCycleCount(0); setStreak(0);
               setWeekData({}); setTotals({});
+              setTasks([]);
+              setAchievements([]);
+              setNewAchievement(null);
             }} style={{ width: "100%", padding: "10px 12px", background: "none", border: "none",
               textAlign: "left", fontSize: 13, color: "#e05050", cursor: "pointer", fontFamily: "inherit" }}>
               {de ? "Statistiken zurücksetzen" : "Reset statistics"}
@@ -1770,10 +1811,11 @@ export default function PomodoroTimer() {
         <div style={{ position: "fixed", inset: 0, zIndex: 50,
           background: lm ? "rgba(245,240,234,0.94)" : "rgba(0,0,0,0.94)",
           display: "flex", alignItems: "center", justifyContent: "center" }}>
-          {activeGame === "crystal"  && <CrystalRush onComplete={handleGameComplete} onSkip={handleGameSkip} T={T} lm={lm} />}
-          {activeGame === "memory"   && <MemoryFlash onComplete={handleGameComplete} onSkip={handleGameSkip} T={T} lm={lm} />}
-          {activeGame === "breakout" && <Breakout    onComplete={handleGameComplete} onSkip={handleGameSkip} T={T} lm={lm} />}
-          {activeGame === "sudoku"   && <Sudoku      onComplete={handleGameComplete} onSkip={handleGameSkip} T={T} lm={lm} />}
+          {activeGame === "blockgrid" && <BlockGrid   onComplete={handleGameComplete} onSkip={handleGameSkip} T={T} lm={lm} />}
+          {activeGame === "crystal"   && <CrystalRush onComplete={handleGameComplete} onSkip={handleGameSkip} T={T} lm={lm} />}
+          {activeGame === "memory"    && <MemoryFlash onComplete={handleGameComplete} onSkip={handleGameSkip} T={T} lm={lm} />}
+          {activeGame === "breakout"  && <Breakout    onComplete={handleGameComplete} onSkip={handleGameSkip} T={T} lm={lm} />}
+          {activeGame === "sudoku"    && <Sudoku      onComplete={handleGameComplete} onSkip={handleGameSkip} T={T} lm={lm} />}
         </div>
       )}
 

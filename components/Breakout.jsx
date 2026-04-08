@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState, useCallback } from "react";
+import { loadGameHighscore, saveGameHighscore } from "../storage.js";
 
 const GAME_DURATION = 60;
 const CANVAS_H = 300;
 const PADDLE_H = 10;
 const PADDLE_Y = 278;
 const BALL_R = 7;
-const HS_KEY = "focuspartner_hs_breakout";
-
-function loadHighscore() { try { return parseInt(localStorage.getItem(HS_KEY)||"0"); } catch { return 0; } }
-function saveHighscore(v) { try { localStorage.setItem(HS_KEY, String(v)); } catch {} }
+const MAX_LIVES = 3;
+function loadHighscore() { return loadGameHighscore("breakout"); }
+function saveHighscore(v) { saveGameHighscore("breakout", v); }
 
 // 10 procedural patterns — picked randomly each game
 const PATTERNS = [
@@ -43,19 +43,23 @@ function makeBricks(cols, rows, canvasW, brickW, brickH, gap) {
 export default function Breakout({ onComplete, onSkip, T, lm }) {
   const canvasRef = useRef(null);
   const isMobile = typeof window !== "undefined" && window.innerWidth < 480;
-  const canvasW = isMobile ? 320 : 400;
-  const cols = isMobile ? 6 : 8;
+  const difficulty = isMobile
+    ? { canvasW: 320, cols: 6, brickW: 44, brickGap: 4, paddleW: 58, paddleSpeed: 8.4, launchVx: 2.4, launchVy: -2.9, bounceVxScale: 3.4 }
+    : { canvasW: 400, cols: 8, brickW: 42, brickGap: 5, paddleW: 88, paddleSpeed: 7.8, launchVx: 2.1, launchVy: -2.6, bounceVxScale: 3.0 };
+  const canvasW = difficulty.canvasW;
+  const cols = difficulty.cols;
   const rows = 5;
-  const brickW = isMobile ? 44 : 42;
+  const brickW = difficulty.brickW;
   const brickH = 14;
-  const brickGap = isMobile ? 4 : 5;
-  const paddleW = isMobile ? 56 : 70;
+  const brickGap = difficulty.brickGap;
 
   const stateRef = useRef(null);
   const rafRef = useRef(null);
   const keysRef = useRef({ left: false, right: false });
   const themeRef = useRef({ T, lm });
   const audioCtxRef = useRef(null);
+  const roundRef = useRef(1);
+  const scoreRef = useRef(0);
   useEffect(() => { themeRef.current = { T, lm }; }, [T, lm]);
 
   const [gameOver, setGameOver] = useState(false);
@@ -63,13 +67,25 @@ export default function Breakout({ onComplete, onSkip, T, lm }) {
   const [finalScore, setFinalScore] = useState(0);
   const [highscore] = useState(loadHighscore);
   const [newRecord, setNewRecord] = useState(false);
-  const savedBricksRef = useRef(null);
-  const [lives, setLives] = useState(3);
+  const [lives, setLives] = useState(MAX_LIVES);
   const [paused, setPaused] = useState(false);
   const pausedRef = useRef(false);
   const confirmQuitRef = useRef(false);
   const [confirmQuit, setConfirmQuit] = useState(false);
   const [gameKey, setGameKey] = useState(0);
+  const [round, setRound] = useState(1);
+
+  const getRoundSettings = useCallback((roundNumber) => {
+    const speedBoost = 1 + (roundNumber - 1) * 0.14;
+    const paddleScale = Math.max(0.72, 1 - (roundNumber - 1) * 0.05);
+    return {
+      paddleW: Math.round(difficulty.paddleW * paddleScale),
+      paddleSpeed: difficulty.paddleSpeed * Math.min(1.35, 1 + (roundNumber - 1) * 0.04),
+      launchVx: difficulty.launchVx * speedBoost,
+      launchVy: difficulty.launchVy * speedBoost,
+      bounceVxScale: difficulty.bounceVxScale * Math.min(1.45, 1 + (roundNumber - 1) * 0.06),
+    };
+  }, [difficulty]);
 
   function getAudioCtx() {
     if (!audioCtxRef.current) audioCtxRef.current = new AudioContext();
@@ -113,13 +129,24 @@ export default function Breakout({ onComplete, onSkip, T, lm }) {
     } catch {}
   }
 
-  function initState(bricks) {
+  function initState(roundNumber) {
+    const roundSettings = getRoundSettings(roundNumber);
+    const bricks = makeBricks(cols, rows, canvasW, brickW, brickH, brickGap);
     return {
+      round: roundNumber,
+      roundSettings,
       paddleX: canvasW / 2,
-      ball: { x: canvasW / 2, y: PADDLE_Y - BALL_R - 2, vx: 2, vy: -2.2 },
-      bricks: bricks || makeBricks(cols, rows, canvasW, brickW, brickH, brickGap),
-      score: 0,
-      lives: 3,
+      ball: {
+        x: canvasW / 2,
+        y: PADDLE_Y - BALL_R - 2,
+        vx: roundSettings.launchVx,
+        vy: roundSettings.launchVy,
+      },
+      bricks,
+      totalBricks: bricks.length,
+      clearedBricks: 0,
+      score: scoreRef.current,
+      lives: MAX_LIVES,
       elapsed: 0,
       lastTime: null,
       running: true,
@@ -130,31 +157,32 @@ export default function Breakout({ onComplete, onSkip, T, lm }) {
   const endGame = useCallback((score, didWin) => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     stateRef.current.running = false;
+    scoreRef.current = score;
     if (score > highscore) { saveHighscore(score); setNewRecord(true); }
     setFinalScore(score);
     setWon(didWin);
-    // Save the brick layout so "Nochmal" can reuse it on fail
-    savedBricksRef.current = stateRef.current.bricks.map(b => ({ ...b, alive: true }));
     setGameOver(true);
     playLose();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [highscore]);
 
-  const resetGame = useCallback((keepLevel) => {
+  const resetGame = useCallback((advanceRound) => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     audioCtxRef.current?.close();
     audioCtxRef.current = null;
-    // On fail: reuse same bricks; on win: generate new layout
-    if (!keepLevel) savedBricksRef.current = null;
+    const nextRound = advanceRound ? roundRef.current + 1 : 1;
+    roundRef.current = nextRound;
+    setRound(nextRound);
+    scoreRef.current = advanceRound ? finalScore : 0;
     setGameOver(false); setWon(false); setFinalScore(0); setNewRecord(false);
-    setLives(3); setPaused(false); pausedRef.current = false;
+    setLives(MAX_LIVES); setPaused(false); pausedRef.current = false;
     confirmQuitRef.current = false; setConfirmQuit(false);
     setGameKey(k => k + 1);
-  }, []);
+  }, [finalScore]);
 
   // Game loop
   useEffect(() => {
-    stateRef.current = initState(savedBricksRef.current);
+    stateRef.current = initState(roundRef.current);
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
@@ -181,10 +209,10 @@ export default function Breakout({ onComplete, onSkip, T, lm }) {
       if (s.elapsed >= GAME_DURATION) { endGame(s.score, true); return; }
 
       // Paddle movement
-      const pspd = 8 * (dt / 16);
+      const pspd = s.roundSettings.paddleSpeed * (dt / 16);
       if (keysRef.current.left)  s.paddleX -= pspd;
       if (keysRef.current.right) s.paddleX += pspd;
-      s.paddleX = Math.max(paddleW / 2, Math.min(canvasW - paddleW / 2, s.paddleX));
+      s.paddleX = Math.max(s.roundSettings.paddleW / 2, Math.min(canvasW - s.roundSettings.paddleW / 2, s.paddleX));
 
       // Ball movement
       const b = s.ball;
@@ -203,10 +231,10 @@ export default function Breakout({ onComplete, onSkip, T, lm }) {
 
           // Paddle
           if (b.vy > 0 && b.y + BALL_R >= PADDLE_Y && b.y - BALL_R <= PADDLE_Y + PADDLE_H &&
-              b.x >= s.paddleX - paddleW / 2 && b.x <= s.paddleX + paddleW / 2) {
+              b.x >= s.paddleX - s.roundSettings.paddleW / 2 && b.x <= s.paddleX + s.roundSettings.paddleW / 2) {
             b.vy = -Math.abs(b.vy);
-            const rel = (b.x - s.paddleX) / (paddleW / 2);
-            b.vx = rel * 4;
+            const rel = (b.x - s.paddleX) / (s.roundSettings.paddleW / 2);
+            b.vx = rel * s.roundSettings.bounceVxScale;
             b.y = PADDLE_Y - BALL_R;
             playWall();
           }
@@ -215,10 +243,11 @@ export default function Breakout({ onComplete, onSkip, T, lm }) {
           if (b.y - BALL_R > CANVAS_H) {
             s.lives--;
             setLives(s.lives);
-            if (s.lives <= 0) { endGame(s.score, true); return; }
+            if (s.lives <= 0) { endGame(s.score, false); return; }
             playLose();
             b.x = s.paddleX; b.y = PADDLE_Y - BALL_R - 2;
-            b.vx = 2.5; b.vy = -3;
+            b.vx = s.roundSettings.launchVx;
+            b.vy = s.roundSettings.launchVy;
             s.ballLaunched = false;
             break;
           }
@@ -229,7 +258,8 @@ export default function Breakout({ onComplete, onSkip, T, lm }) {
             if (b.x + BALL_R > brick.x && b.x - BALL_R < brick.x + brick.w &&
                 b.y + BALL_R > brick.y && b.y - BALL_R < brick.y + brick.h) {
               brick.alive = false;
-              s.score += 10;
+              s.clearedBricks++;
+              s.score = ((s.round - 1) * 100) + Math.floor((s.clearedBricks / s.totalBricks) * 100);
               playBrick();
               const overlapL = (b.x + BALL_R) - brick.x;
               const overlapR = (brick.x + brick.w) - (b.x - BALL_R);
@@ -270,7 +300,7 @@ export default function Breakout({ onComplete, onSkip, T, lm }) {
       // Paddle
       ctx.fillStyle = th.accent;
       ctx.beginPath();
-      ctx.roundRect(s.paddleX - paddleW / 2, PADDLE_Y, paddleW, PADDLE_H, 5);
+      ctx.roundRect(s.paddleX - s.roundSettings.paddleW / 2, PADDLE_Y, s.roundSettings.paddleW, PADDLE_H, 5);
       ctx.fill();
 
       // Ball
@@ -364,6 +394,7 @@ export default function Breakout({ onComplete, onSkip, T, lm }) {
       if (!gameOver && stateRef.current) {
         setHudScore(stateRef.current.score);
         setHudTime(Math.max(0, Math.ceil(GAME_DURATION - stateRef.current.elapsed)));
+        setLives(stateRef.current.lives);
       }
     }, 250);
     return () => clearInterval(id);
@@ -383,7 +414,7 @@ export default function Breakout({ onComplete, onSkip, T, lm }) {
         <span style={{ fontSize: 13, color: T.textMid }}>{mm}:{ss}</span>
         <span style={{ fontSize: 14, fontWeight: 700, color: T.accent }}>{hudScore} Pkt</span>
         <span style={{ fontSize: 11, color: T.textDim }}>
-          {"♥ ".repeat(lives)}{"♡ ".repeat(Math.max(0, 3 - lives))}
+          Runde {round} · {"♥ ".repeat(lives)}{"♡ ".repeat(Math.max(0, MAX_LIVES - lives))}
         </span>
       </div>
 
@@ -426,11 +457,11 @@ export default function Breakout({ onComplete, onSkip, T, lm }) {
               {won ? "🎉 Geschafft!" : "Game Over"}
             </div>
             <div style={{ fontSize: 38, fontWeight: 800, color: T.accent, lineHeight: 1 }}>{finalScore}</div>
-            <div style={{ fontSize: 12, color: T.textMid }}>Punkte</div>
+            <div style={{ fontSize: 12, color: T.textMid }}>Standardisierte Punkte · Runde {round}</div>
             {newRecord && <div style={{ fontSize: 13, color: "#f59e0b", fontWeight: 700 }}>Neuer Rekord!</div>}
             <div style={{ fontSize: 13, color: T.textMid }}>Rekord: {Math.max(highscore, finalScore)} Pkt</div>
             <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-              <button onClick={() => resetGame(!won)} style={{ padding: "8px 18px", borderRadius: 8,
+              <button onClick={() => resetGame(won)} style={{ padding: "8px 18px", borderRadius: 8,
                 border: `1px solid ${T.border}`, background: T.inputBg, color: T.textMid,
                 fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>
                 {won ? "Nächstes Level" : "Nochmal"}

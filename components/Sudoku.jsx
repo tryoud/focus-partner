@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { loadGameHighscore, saveGameHighscore } from "../storage.js";
 
-const HS_KEY = "focuspartner_hs_sudoku";
-function loadHighscore() { try { return parseInt(localStorage.getItem(HS_KEY)||"0"); } catch { return 0; } }
-function saveHighscore(v) { try { localStorage.setItem(HS_KEY, String(v)); } catch {} }
+function loadHighscore() { return loadGameHighscore("sudoku"); }
+function saveHighscore(v) { saveGameHighscore("sudoku", v); }
 
 // ── Generator ─────────────────────────────────────────────────────────────────
 function sudokuValid(g, pos, num) {

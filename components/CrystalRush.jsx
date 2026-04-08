@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
+import { loadGameHighscore, saveGameHighscore } from "../storage.js";
 
 const GAME_DURATION = 60;
 const CANVAS_W_DESKTOP = 400;
@@ -9,19 +10,14 @@ const PLAYER_H = 32;
 const PLAYER_Y = 260;
 const CRYSTAL_SIZE = 16;
 
-function scoreToHighscore(score) {
-  try {
-    const stored = parseInt(localStorage.getItem("focuspartner_crystal_rush_highscore") || "0");
-    return Math.max(stored, score);
-  } catch { return score; }
-}
+function scoreToHighscore(score) { return Math.max(loadGameHighscore("crystal"), score); }
 
 function saveHighscore(score) {
-  try { localStorage.setItem("focuspartner_crystal_rush_highscore", String(score)); } catch {}
+  saveGameHighscore("crystal", score);
 }
 
 function loadHighscore() {
-  try { return parseInt(localStorage.getItem("focuspartner_crystal_rush_highscore") || "0"); } catch { return 0; }
+  return loadGameHighscore("crystal");
 }
 
 function getPhase(elapsed) {
