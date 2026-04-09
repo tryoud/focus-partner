@@ -106,6 +106,7 @@ export default function BlockGrid({ onComplete, onSkip, T, lm }) {
   const isMobile = typeof window !== "undefined" && window.innerWidth < 480;
   const cellSize = isMobile ? 28 : 34;
   const boardSize = GRID_SIZE * cellSize + (GRID_SIZE - 1) * 4;
+  const mobileDragLift = isMobile ? (cellSize * 3 + 8) : 0;
   const boardRef = useRef(null);
 
   const [board, setBoard] = useState(createEmptyBoard);
@@ -182,13 +183,14 @@ export default function BlockGrid({ onComplete, onSkip, T, lm }) {
     };
   }, [activeAnchorCell, board, hoveredCell, selectedPiece]);
 
-  const getBoardCellFromPoint = useCallback((clientX, clientY) => {
+  const getBoardCellFromPoint = useCallback((clientX, clientY, visualLiftY = 0) => {
     const rect = boardRef.current?.getBoundingClientRect();
     if (!rect) return null;
-    if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) return null;
+    const adjustedY = clientY - visualLiftY;
+    if (clientX < rect.left || clientX > rect.right || adjustedY < rect.top || adjustedY > rect.bottom) return null;
 
     const x = Math.floor((clientX - rect.left) / (cellSize + 4));
-    const y = Math.floor((clientY - rect.top) / (cellSize + 4));
+    const y = Math.floor((adjustedY - rect.top) / (cellSize + 4));
     if (x < 0 || x >= GRID_SIZE || y < 0 || y >= GRID_SIZE) return null;
     return { x, y };
   }, [cellSize]);
@@ -239,11 +241,11 @@ export default function BlockGrid({ onComplete, onSkip, T, lm }) {
     const handlePointerMove = (e) => {
       const point = { x: e.clientX, y: e.clientY };
       setDragState((current) => current ? { ...current, pointerX: point.x, pointerY: point.y } : current);
-      setHoveredCell(getBoardCellFromPoint(point.x, point.y));
+      setHoveredCell(getBoardCellFromPoint(point.x, point.y, isMobile ? mobileDragLift : 0));
     };
 
     const handlePointerUp = (e) => {
-      const targetCell = getBoardCellFromPoint(e.clientX, e.clientY);
+      const targetCell = getBoardCellFromPoint(e.clientX, e.clientY, isMobile ? mobileDragLift : 0);
       const draggedPiece = pieces.find((piece) => piece.id === dragState.pieceId);
       if (targetCell && draggedPiece) {
         setSelectedPieceId(draggedPiece.id);
@@ -263,7 +265,7 @@ export default function BlockGrid({ onComplete, onSkip, T, lm }) {
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerUp);
     };
-  }, [board, dragState, getBoardCellFromPoint, handlePlace, pieces]);
+  }, [board, dragState, getBoardCellFromPoint, handlePlace, isMobile, mobileDragLift, pieces]);
 
   const restart = () => {
     setBoard(createEmptyBoard());
@@ -357,16 +359,16 @@ export default function BlockGrid({ onComplete, onSkip, T, lm }) {
                 if (gameOver) return;
                 const anchorCell = getDefaultAnchorCell(piece);
                 const ghostGap = 4;
-                const anchorOffsetX = anchorCell[0] * (cellSize + ghostGap) + cellSize / 2;
-                const anchorOffsetY = anchorCell[1] * (cellSize + ghostGap) + cellSize / 2;
+                const ghostWidth = size.w * cellSize + (size.w - 1) * ghostGap;
+                const ghostHeight = size.h * cellSize + (size.h - 1) * ghostGap;
                 setSelectedPieceId(piece.id);
                 setDragState({
                   pieceId: piece.id,
                   anchorCell,
                   pointerX: e.clientX,
                   pointerY: e.clientY,
-                  offsetX: anchorOffsetX,
-                  offsetY: anchorOffsetY,
+                  offsetX: ghostWidth / 2,
+                  offsetY: ghostHeight / 2 + mobileDragLift,
                 });
               }}
               style={{
